@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MemShack.Application\MemShack.Application.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.Config\MemShack.Infrastructure.Config.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.Sqlite\MemShack.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.VectorStore\MemShack.Infrastructure.VectorStore.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <PackageId>LoxSmoke.Mems</PackageId>
+    <ToolCommandName>mems</ToolCommandName>
+    <Version>0.1.0</Version>
+    <Authors>LoxSmoke</Authors>
+    <Description>MemShack CLI packaged as a .NET tool for mining, searching, and maintaining MemPalace-compatible memory stores.</Description>
+    <PackageTags>memory;ai;llm;rag;cli;dotnet-tool;mcp</PackageTags>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/loxsmoke/memshack</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/loxsmoke/memshack</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageOutputPath>nuget</PackageOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MemShack.Application\MemShack.Application.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.Config\MemShack.Infrastructure.Config.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.Sqlite\MemShack.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\MemShack.Infrastructure.VectorStore\MemShack.Infrastructure.VectorStore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="" Link="LICENSE" />
+  </ItemGroup>
+</Project>

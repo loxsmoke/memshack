@@ -1,0 +1,7 @@
+﻿{
+  "names": ["Alice", "Ben", "Riley"],
+  "username_map": {
+    "jdoe": "John",
+    "asmith": "Alice"
+  }
+}

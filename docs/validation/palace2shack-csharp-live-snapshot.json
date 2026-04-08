@@ -1,0 +1,109 @@
+{
+  "transcripts": {
+    "plain-text-transcript.txt": "\u003E What is memory?\nMemory is persistence.\n\n\u003E Why does it matter?\nIt enables continuity.\n\n\u003E How do we build it?\nWith structured storage.",
+    "claude-code-session.jsonl": "\u003E How should we store memory?\nUse structured local storage.",
+    "codex-session.jsonl": "\u003E What did we decide about auth?\nWe chose JWT tokens with refresh cookies.",
+    "slack-export.json": "\u003E We should migrate the auth flow.\nPasskeys are a good candidate.\n\n\u003E Lets document the tradeoffs.",
+    "chatgpt-conversation.json": "\u003E Why did we switch to passkeys?\nWe wanted phishing-resistant login with better UX.",
+    "claude-flat-messages.json": "\u003E Hi\nHello"
+  },
+  "conversation_chunks": [
+    "\u003E What is memory?\nMemory is persistence.",
+    "\u003E Why does it matter?\nIt enables continuity.",
+    "\u003E How do we build it?\nWith structured storage."
+  ],
+  "project_scan": [
+    "backend/auth.py",
+    "docs/architecture.md",
+    "frontend/app.tsx",
+    "notes/roadmap.md"
+  ],
+  "project_mining": {
+    "drawers_filed": 4,
+    "drawer_snapshots": [
+      "drawer_product_backend_47b5a59dfe999c5d|product|backend|backend/auth.py|0|palace2shack-live",
+      "drawer_product_documentation_3fda7af675c25a88|product|documentation|docs/architecture.md|0|palace2shack-live",
+      "drawer_product_frontend_5d98627890b6751c|product|frontend|frontend/app.tsx|0|palace2shack-live",
+      "drawer_product_planning_43b7088a0be69e89|product|planning|notes/roadmap.md|0|palace2shack-live"
+    ]
+  },
+  "knowledge_graph": {
+    "alice_outgoing": [
+      "Alice|parent_of|Max|2015-04-01|",
+      "Alice|works_at|Acme Corp|2020-01-01|2024-12-31",
+      "Alice|works_at|NewCo|2025-01-01|"
+    ],
+    "works_at_2024": [
+      "Alice|works_at|Acme Corp|2020-01-01|2024-12-31"
+    ],
+    "works_at_2025": [
+      "Alice|works_at|NewCo|2025-01-01|"
+    ],
+    "max_timeline": [
+      "Alice|parent_of|Max|2015-04-01|",
+      "Max|does|chess|2024-06-01|",
+      "Max|does|swimming|2025-01-01|"
+    ],
+    "stats": {
+      "entities": 6,
+      "triples": 5,
+      "current_facts": 4,
+      "expired_facts": 1,
+      "relationship_types": [
+        "does",
+        "parent_of",
+        "works_at"
+      ]
+    }
+  },
+  "search": {
+    "auth": [
+      {
+        "wing": "project",
+        "room": "backend",
+        "source_file": "auth.py",
+        "similarity": 1,
+        "text": "The authentication module uses JWT tokens for session management. Tokens expire after 24 hours. Refresh tokens are stored in HttpOnly cookies."
+      }
+    ],
+    "notes": [
+      {
+        "wing": "notes",
+        "room": "planning",
+        "source_file": "sprint.md",
+        "similarity": 1,
+        "text": "Sprint planning: migrate auth to passkeys by Q3. Evaluate ChromaDB alternatives for vector search."
+      }
+    ],
+    "backend": [
+      {
+        "wing": "project",
+        "room": "backend",
+        "source_file": "auth.py",
+        "similarity": 0.5,
+        "text": "The authentication module uses JWT tokens for session management. Tokens expire after 24 hours. Refresh tokens are stored in HttpOnly cookies."
+      },
+      {
+        "wing": "project",
+        "room": "backend",
+        "source_file": "db.py",
+        "similarity": 0.5,
+        "text": "Database migrations are handled by Alembic. We use PostgreSQL 15 with connection pooling via pgbouncer."
+      }
+    ]
+  },
+  "mcp_status": {
+    "total_drawers": 4,
+    "wings": {
+      "notes": 1,
+      "project": 3
+    },
+    "rooms": {
+      "planning": 1,
+      "backend": 2,
+      "frontend": 1
+    },
+    "has_protocol": true,
+    "has_aaak_dialect": true
+  }
+}

@@ -11,12 +11,6 @@
 *.sln.docstates
 *.env
 
-# User-specific files (MonoDevelop/Xamarin Studio)
-*.userprefs
-
-# Mono auto generated files
-mono_crash.*
-
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
@@ -33,6 +27,7 @@ bld/
 [Oo]ut/
 [Ll]og/
 [Ll]ogs/
+.dotnet/
 
 # Build results on 'Bin' directories
 **/[Bb]in/*
@@ -61,11 +56,6 @@ nunit-*.xml
 # Approval Tests result files
 *.received.*
 
-# Build Results of an ATL Project
-[Dd]ebugPS/
-[Rr]eleasePS/
-dlldata.c
-
 # Benchmark Results
 BenchmarkDotNet.Artifacts/
 
@@ -76,9 +66,6 @@ artifacts/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
-
-# StyleCop
-StyleCopReport.xml
 
 # Files built by Visual Studio
 *_i.c
@@ -108,7 +95,6 @@ StyleCopReport.xml
 *.tlog
 *.vspscc
 *.vssscc
-.builds
 *.pidb
 *.svclog
 *.scc
@@ -116,46 +102,13 @@ StyleCopReport.xml
 # Chutzpah Test files
 _Chutzpah*
 
-# Visual C++ cache files
-ipch/
-*.aps
-*.ncb
-*.opendb
-*.opensdf
-*.sdf
-*.cachefile
-*.VC.db
-*.VC.VC.opendb
-
-# Visual Studio profiler
-*.psess
-*.vsp
-*.vspx
-*.sap
-
-# Visual Studio Trace Files
-*.e2e
-
-# TFS 2012 Local Workspace
-$tf/
-
-# Guidance Automation Toolkit
-*.gpState
-
 # ReSharper is a .NET coding add-in
 _ReSharper*/
 *.[Rr]e[Ss]harper
 *.DotSettings.user
 
-# TeamCity is a build add-in
-_TeamCity*
-
 # DotCover is a Code Coverage Tool
 *.dotCover
-
-# AxoCover is a Code Coverage Tool
-.axoCover/*
-!.axoCover/settings.json
 
 # Coverlet is a free, cross platform Code Coverage Tool
 coverage*.json
@@ -166,31 +119,8 @@ coverage*.info
 *.coverage
 *.coveragexml
 
-# NCrunch
-_NCrunch_*
-.NCrunch_*
-.*crunch*.local.xml
-nCrunchTemp_*
-
-# MightyMoose
-*.mm.*
-AutoTest.Net/
-
 # Web workbench (sass)
 .sass-cache/
-
-# Installshield output folder
-[Ee]xpress/
-
-# DocProject is a documentation generator add-in
-DocProject/buildhelp/
-DocProject/Help/*.HxT
-DocProject/Help/*.HxC
-DocProject/Help/*.hhc
-DocProject/Help/*.hhk
-DocProject/Help/*.hhp
-DocProject/Help/Html2
-DocProject/Help/html
 
 # Click-Once directory
 publish/
@@ -321,43 +251,12 @@ node_modules/
 *.ncb
 *.aps
 
-# Visual Studio LightSwitch build output
-**/*.HTMLClient/GeneratedArtifacts
-**/*.DesktopClient/GeneratedArtifacts
-**/*.DesktopClient/ModelManifest.xml
-**/*.Server/GeneratedArtifacts
-**/*.Server/ModelManifest.xml
-_Pvt_Extensions
-
-# Paket dependency manager
-**/.paket/paket.exe
-paket-files/
-
-# FAKE - F# Make
-**/.fake/
-
-# CodeRush personal settings
-**/.cr/personal
-
 # Python Tools for Visual Studio (PTVS)
 **/__pycache__/
 *.pyc
 
-# Cake - Uncomment if you are using it
-#tools/**
-#!tools/packages.config
-
 # Tabs Studio
 *.tss
-
-# Telerik's JustMock configuration file
-*.jmconfig
-
-# BizTalk build output
-*.btp.cs
-*.btm.cs
-*.odx.cs
-*.xsd.cs
 
 # OpenCover UI analysis results
 OpenCover/
@@ -369,29 +268,11 @@ ASALocalRun/
 *.binlog
 MSBuild_Logs/
 
-# AWS SAM Build and Temporary Artifacts folder
-.aws-sam
-
-# NVidia Nsight GPU debugger configuration file
-*.nvuser
-
-# MFractors (Xamarin productivity tool) working folder
-**/.mfractor/
-
 # Local History for Visual Studio
 **/.localhistory/
 
 # Visual Studio History (VSHistory) files
 .vshistory/
-
-# BeatPulse healthcheck temp database
-healthchecksdb
-
-# Backup folder for Package Reference Convert tool in Visual Studio 2017
-MigrationBackup/
-
-# Ionide (cross platform F# VS Code tools) working folder
-**/.ionide/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd

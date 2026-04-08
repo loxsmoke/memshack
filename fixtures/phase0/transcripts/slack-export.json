@@ -1,0 +1,5 @@
+﻿[
+  {"type": "message", "user": "alice", "text": "We should migrate the auth flow."},
+  {"type": "message", "user": "bot", "text": "Passkeys are a good candidate."},
+  {"type": "message", "user": "alice", "text": "Lets document the tradeoffs."}
+]

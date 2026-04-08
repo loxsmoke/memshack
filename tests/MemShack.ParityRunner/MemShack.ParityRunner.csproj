@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MemShack.Application\MemShack.Application.csproj" />
+    <ProjectReference Include="..\..\src\MemShack.Core\MemShack.Core.csproj" />
+    <ProjectReference Include="..\..\src\MemShack.Infrastructure.Config\MemShack.Infrastructure.Config.csproj" />
+    <ProjectReference Include="..\..\src\MemShack.Infrastructure.Sqlite\MemShack.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\MemShack.Infrastructure.VectorStore\MemShack.Infrastructure.VectorStore.csproj" />
+    <ProjectReference Include="..\..\src\MemShack.McpServer\MemShack.McpServer.csproj" />
+  </ItemGroup>
+
+</Project>

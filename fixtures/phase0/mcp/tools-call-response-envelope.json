@@ -1,0 +1,12 @@
+﻿{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"total_drawers\": 4,\n  \"wings\": {\n    \"project\": 3,\n    \"notes\": 1\n  }\n}"
+      }
+    ]
+  }
+}

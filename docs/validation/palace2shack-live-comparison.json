@@ -1,0 +1,39 @@
+{
+  "local_dependency_shims": [
+    "chromadb",
+    "yaml"
+  ],
+  "match": false,
+  "python_interpreter": "C:\\Users\\paulius\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+  "python_version": "3.13.5",
+  "sections": [
+    {
+      "match": false,
+      "name": "transcripts"
+    },
+    {
+      "match": false,
+      "name": "conversation_chunks"
+    },
+    {
+      "match": true,
+      "name": "project_scan"
+    },
+    {
+      "match": true,
+      "name": "project_mining"
+    },
+    {
+      "match": true,
+      "name": "knowledge_graph"
+    },
+    {
+      "match": true,
+      "name": "search"
+    },
+    {
+      "match": true,
+      "name": "mcp_status"
+    }
+  ]
+}

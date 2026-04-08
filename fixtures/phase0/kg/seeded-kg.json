@@ -1,0 +1,17 @@
+﻿{
+  "entities": [
+    {"name": "Alice", "type": "person"},
+    {"name": "Max", "type": "person"},
+    {"name": "swimming", "type": "activity"},
+    {"name": "chess", "type": "activity"},
+    {"name": "Acme Corp", "type": "unknown"},
+    {"name": "NewCo", "type": "unknown"}
+  ],
+  "triples": [
+    {"subject": "Alice", "predicate": "parent_of", "object": "Max", "valid_from": "2015-04-01", "valid_to": null},
+    {"subject": "Max", "predicate": "does", "object": "swimming", "valid_from": "2025-01-01", "valid_to": null},
+    {"subject": "Max", "predicate": "does", "object": "chess", "valid_from": "2024-06-01", "valid_to": null},
+    {"subject": "Alice", "predicate": "works_at", "object": "Acme Corp", "valid_from": "2020-01-01", "valid_to": "2024-12-31"},
+    {"subject": "Alice", "predicate": "works_at", "object": "NewCo", "valid_from": "2025-01-01", "valid_to": null}
+  ]
+}

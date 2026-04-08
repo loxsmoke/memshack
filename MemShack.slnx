@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MemShack.Application/MemShack.Application.csproj" />
+    <Project Path="src/MemShack.Cli/MemShack.Cli.csproj" />
+    <Project Path="src/MemShack.Core/MemShack.Core.csproj" />
+    <Project Path="src/MemShack.Infrastructure.Config/MemShack.Infrastructure.Config.csproj" />
+    <Project Path="src/MemShack.Infrastructure.Sqlite/MemShack.Infrastructure.Sqlite.csproj" />
+    <Project Path="src/MemShack.Infrastructure.VectorStore/MemShack.Infrastructure.VectorStore.csproj" />
+    <Project Path="src/MemShack.McpServer/MemShack.McpServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MemShack.ParityRunner/MemShack.ParityRunner.csproj" />
+    <Project Path="tests/MemShack.Tests/MemShack.Tests.csproj" />
+  </Folder>
+</Solution>

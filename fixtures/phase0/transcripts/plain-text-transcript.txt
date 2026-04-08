@@ -1,0 +1,8 @@
+﻿> What is memory?
+Memory is persistence.
+
+> Why does it matter?
+It enables continuity.
+
+> How do we build it?
+With structured storage.

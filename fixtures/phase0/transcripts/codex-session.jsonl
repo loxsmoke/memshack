@@ -1,0 +1,3 @@
+﻿{"type":"session_meta","payload":{"id":"session-1"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"What did we decide about auth?"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"We chose JWT tokens with refresh cookies."}}

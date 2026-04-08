@@ -1,0 +1,6 @@
+﻿wing: test_project
+rooms:
+  - name: backend
+    description: Backend code
+  - name: general
+    description: General

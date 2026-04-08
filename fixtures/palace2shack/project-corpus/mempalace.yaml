@@ -1,0 +1,27 @@
+wing: product
+rooms:
+  - name: backend
+    description: Backend implementation
+    keywords:
+      - backend
+      - auth
+      - api
+      - database
+  - name: frontend
+    description: Frontend implementation
+    keywords:
+      - frontend
+      - react
+      - ui
+  - name: planning
+    description: Planning and roadmap notes
+    keywords:
+      - roadmap
+      - planning
+      - milestone
+  - name: documentation
+    description: Documentation and architecture notes
+    keywords:
+      - docs
+      - architecture
+      - design
