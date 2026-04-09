@@ -376,7 +376,7 @@ public sealed class MemShackMcpServerTests
     }
 
     private static JsonNode LoadFixture(string name) =>
-        JsonNode.Parse(File.ReadAllText(Path.Combine("C:\\dev\\memshack\\fixtures\\phase0\\mcp", name)))!;
+        JsonNode.Parse(File.ReadAllText(FixturePaths.GetPhase0Path("mcp", name)))!;
 
     private static JsonObject ToObject(object? value) => (JsonObject)JsonSerializer.SerializeToNode(value)!;
 

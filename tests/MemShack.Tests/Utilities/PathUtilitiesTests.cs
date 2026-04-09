@@ -27,7 +27,9 @@ public sealed class PathUtilitiesTests
     [TestMethod]
     public void ToProjectRelativePosixPath_NormalizesSeparators()
     {
-        var result = PathUtilities.ToProjectRelativePosixPath(@"C:\repo", @"C:\repo\src\app.py");
+        var projectPath = Path.Combine(Path.GetTempPath(), "repo");
+        var targetPath = Path.Combine(projectPath, "src", "app.py");
+        var result = PathUtilities.ToProjectRelativePosixPath(projectPath, targetPath);
 
         Assert.Equal("src/app.py", result);
     }
