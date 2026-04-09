@@ -168,7 +168,14 @@ if ! local_list="$(dotnet tool list --local 2>&1)"; then
     abort "dotnet tool list --local failed"
 fi
 
-[[ "$local_list" == *"$PACKAGE_ID"* && "$local_list" == *"$TOOL_COMMAND"* ]] || abort "Local tool list did not contain the packaged tool."
+local_list_lower="$(printf '%s' "$local_list" | tr '[:upper:]' '[:lower:]')"
+package_id_lower="$(printf '%s' "$PACKAGE_ID" | tr '[:upper:]' '[:lower:]')"
+tool_command_lower="$(printf '%s' "$TOOL_COMMAND" | tr '[:upper:]' '[:lower:]')"
+
+if [[ "$local_list_lower" != *"$package_id_lower"* || "$local_list_lower" != *"$tool_command_lower"* ]]; then
+    printf 'Local tool list output:\n%s\n' "$local_list" >&2
+    abort "Local tool list did not contain the packaged tool."
+fi
 
 invoke_checked "Run local tool" \
     dotnet tool run "$TOOL_COMMAND" -- --help
