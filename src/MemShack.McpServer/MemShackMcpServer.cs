@@ -11,7 +11,7 @@ using MemShack.Core.Interfaces;
 using MemShack.Core.Models;
 using MemShack.Infrastructure.Config;
 using MemShack.Infrastructure.Sqlite.KnowledgeGraph;
-using MemShack.Infrastructure.VectorStore.Collections;
+using MemShack.Infrastructure.VectorStore;
 
 namespace MemShack.McpServer;
 
@@ -91,7 +91,7 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
 
         return new MemShackMcpServer(
             config,
-            new ChromaCompatibilityVectorStore(config.PalacePath),
+            VectorStoreFactory.Create(config),
             new SqliteKnowledgeGraphStore(knowledgeGraphPath),
             new PalaceGraphBuilder());
     }

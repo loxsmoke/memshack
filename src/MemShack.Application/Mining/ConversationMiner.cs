@@ -1,6 +1,7 @@
 using MemShack.Core.Constants;
 using MemShack.Core.Interfaces;
 using MemShack.Core.Models;
+using MemShack.Core.Utilities;
 
 namespace MemShack.Application.Mining;
 
@@ -65,11 +66,12 @@ public sealed class ConversationMiner
         bool dryRun = false,
         string extractMode = "exchange",
         string collectionName = CollectionNames.Drawers,
+        Action<MiningProgressUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var convoPath = Path.GetFullPath(conversationDirectory);
         var resolvedWing = string.IsNullOrWhiteSpace(wing)
-            ? MiningUtilities.NormalizeWingName(Path.GetFileName(convoPath))
+            ? MiningUtilities.NormalizeWingName(PathUtilities.GetLeafName(convoPath))
             : wing;
 
         var files = ScanConversationFiles(convoPath);
@@ -85,6 +87,7 @@ public sealed class ConversationMiner
 
         var totalDrawers = 0;
         var filesSkipped = 0;
+        var filesProcessed = 0;
         var roomCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var file in files)
@@ -101,6 +104,8 @@ public sealed class ConversationMiner
             if (result.DrawersAdded == 0 && !dryRun)
             {
                 filesSkipped++;
+                filesProcessed++;
+                progress?.Invoke(new MiningProgressUpdate(filesProcessed, files.Count, filesSkipped, totalDrawers, dryRun));
                 continue;
             }
 
@@ -111,6 +116,9 @@ public sealed class ConversationMiner
                     ? count + entry.Value
                     : entry.Value;
             }
+
+            filesProcessed++;
+            progress?.Invoke(new MiningProgressUpdate(filesProcessed, files.Count, filesSkipped, totalDrawers, dryRun));
         }
 
         return new MiningRunResult(
@@ -119,6 +127,7 @@ public sealed class ConversationMiner
             filesSkipped,
             totalDrawers,
             roomCounts,
+            [],
             dryRun);
     }
 

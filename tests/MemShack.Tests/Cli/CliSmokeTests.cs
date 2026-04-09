@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MemShack.Cli;
 using MemShack.Core.Constants;
 using MemShack.Tests.Utilities;
@@ -63,7 +64,116 @@ public sealed class CliSmokeTests
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(Path.Combine(projectRoot, ConfigFileNames.MempalaceYaml)));
         Assert.True(File.Exists(Path.Combine(configDirectory, ConfigFileNames.ConfigJson)));
-        Assert.Contains("Project config saved", stdout.ToString());
+        Assert.Contains("Config saved", stdout.ToString());
+        Assert.Contains("Next step:", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Init_WithTrailingSeparator_WritesWingFromDirectoryName()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var projectRoot = temp.GetPath("project-root");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "backend"));
+        File.WriteAllText(Path.Combine(projectRoot, "backend", "app.py"), "print('hello')\n" + new string('a', 80));
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["init", projectRoot + Path.DirectorySeparatorChar, "--yes"], stdout, stderr);
+        var config = File.ReadAllText(Path.Combine(projectRoot, ConfigFileNames.MempalaceYaml));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("wing: project_root", config);
+        Assert.Equal(string.Empty, stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Init_WithYes_ShowsEntityDetectionAndWritesEntitiesJson()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "backend"));
+        File.WriteAllText(
+            Path.Combine(projectRoot, "docs", "notes.md"),
+            """
+            > Riley: are we ready?
+            Riley said the plan still works.
+            Riley told me she wanted to ship it carefully.
+            Thanks Riley, she already tested everything.
+            Riley laughed when she saw the green build.
+
+            We are building Tool now.
+            Tool v2 replaces the older scripts.
+            I deployed Tool yesterday.
+            The Tool architecture is much simpler.
+            """);
+        File.WriteAllText(Path.Combine(projectRoot, "backend", "app.py"), "print('hello')\n");
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["init", projectRoot, "--yes"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("Scanning for entities in:", stdout.ToString());
+        Assert.Contains("MemShack - Entity Detection", stdout.ToString());
+        Assert.Contains("Entities saved:", stdout.ToString());
+        Assert.Contains("Local setup", stdout.ToString());
+        Assert.Contains("ROOM:", stdout.ToString());
+
+        var entitiesPath = Path.Combine(projectRoot, ConfigFileNames.EntitiesJson);
+        Assert.True(File.Exists(entitiesPath));
+
+        using var document = JsonDocument.Parse(File.ReadAllText(entitiesPath));
+        var root = document.RootElement;
+        Assert.Contains(
+            root.GetProperty("people").EnumerateArray().Select(item => item.GetString()).OfType<string>(),
+            name => name == "Riley");
+        Assert.Contains(
+            root.GetProperty("projects").EnumerateArray().Select(item => item.GetString()).OfType<string>(),
+            name => name == "Tool");
+        Assert.True(root.GetProperty("entities").TryGetProperty("Riley", out _));
+        Assert.True(root.GetProperty("entities").TryGetProperty("Tool", out _));
+    }
+
+    [TestMethod]
+    public async Task Init_WithoutYes_ShowsInteractiveEntityReview()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        File.WriteAllText(
+            Path.Combine(projectRoot, "docs", "notes.md"),
+            """
+            > Riley: are we ready?
+            Riley said the plan still works.
+            Riley told me she wanted to ship it carefully.
+
+            We are building Tool now.
+            Tool v2 replaces the older scripts.
+            The Tool architecture is much simpler.
+            """);
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdin = new StringReader(Environment.NewLine);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["init", projectRoot], stdin, stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("Your choice [enter/edit/add]:", stdout.ToString());
+        Assert.Contains("Confirmed:", stdout.ToString());
+        Assert.Contains("Accept all rooms", stdout.ToString());
+        Assert.True(File.Exists(Path.Combine(projectRoot, ConfigFileNames.EntitiesJson)));
     }
 
     [TestMethod]
@@ -108,6 +218,10 @@ public sealed class CliSmokeTests
         Assert.Equal(0, wakeCode);
         Assert.Equal(0, statusCode);
         Assert.Equal(0, repairCode);
+        Assert.Contains("MemShack Mine", mineOut.ToString());
+        Assert.Contains("Wing:    project", mineOut.ToString());
+        Assert.Contains("By room:", mineOut.ToString());
+        Assert.Contains("Next: mems search \"what you're looking for\"", mineOut.ToString());
         Assert.Contains("Drawers filed", mineOut.ToString());
         Assert.Contains("Results for: \"JWT authentication\"", searchOut.ToString());
         Assert.Contains("Wake-up text", wakeOut.ToString());
@@ -144,7 +258,7 @@ public sealed class CliSmokeTests
                 '\n',
                 [
                     "Claude Code v1",
-                    "⏺ 9:41 PM Tuesday, April 01, 2026",
+                    "âº 9:41 PM Tuesday, April 01, 2026",
                     "> plan migration tasks",
                     "Sure.",
                     "line 5",
@@ -154,7 +268,7 @@ public sealed class CliSmokeTests
                     "line 9",
                     "line 10",
                     "Claude Code v1",
-                    "⏺ 10:05 PM Tuesday, April 01, 2026",
+                    "âº 10:05 PM Tuesday, April 01, 2026",
                     "> review compression work",
                     "Okay.",
                     "line 15",
@@ -182,6 +296,7 @@ public sealed class CliSmokeTests
         Assert.Equal(0, compressDryRunCode);
         Assert.Equal(0, compressCode);
         Assert.Contains("Mode: convos", mineOut.ToString());
+        Assert.Contains(Path.Combine(palacePath, "collections", $"{CollectionNames.Drawers}.json"), mineOut.ToString());
         Assert.Contains("would create 2 files", splitOut.ToString());
         Assert.Contains("dry run", compressDryRunOut.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Stored", compressOut.ToString());

@@ -94,7 +94,30 @@ public sealed class LocalRoomDetector : IRoomDetector
         "build",
         ".next",
         "coverage",
+        ".dotnet",
+        ".nuget",
+        "bin",
+        "obj",
     ];
+
+    private static readonly IReadOnlyDictionary<string, int> PreferredRoomOrder =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["src"] = 0,
+            ["backend"] = 1,
+            ["frontend"] = 2,
+            ["design"] = 3,
+            ["scripts"] = 4,
+            ["fixtures"] = 5,
+            ["testing"] = 6,
+            ["documentation"] = 7,
+            ["configuration"] = 8,
+            ["planning"] = 9,
+            ["research"] = 10,
+            ["team"] = 11,
+            ["meetings"] = 12,
+            ["costs"] = 13,
+        };
 
     public IReadOnlyList<RoomDefinition> DetectRoomsFromFolders(string projectDirectory)
     {
@@ -130,15 +153,22 @@ public sealed class LocalRoomDetector : IRoomDetector
                     continue;
                 }
 
-                AddRoomCandidate(foundRooms, subDirectory.Name);
+                AddNestedRoomCandidate(foundRooms, subDirectory.Name);
             }
         }
 
         var rooms = foundRooms
-            .Select(pair => new RoomDefinition(
-                pair.Key,
-                $"Files from {pair.Value}/",
-                [pair.Key, pair.Value.ToLowerInvariant()]))
+            .Select((pair, index) => new
+            {
+                Room = new RoomDefinition(
+                    pair.Key,
+                    $"Files from {pair.Value}/",
+                    [pair.Key, pair.Value.ToLowerInvariant()]),
+                Index = index,
+            })
+            .OrderBy(entry => GetPreferredRoomRank(entry.Room.Name))
+            .ThenBy(entry => entry.Index)
+            .Select(entry => entry.Room)
             .ToList();
 
         if (rooms.All(room => room.Name != "general"))
@@ -224,6 +254,20 @@ public sealed class LocalRoomDetector : IRoomDetector
             foundRooms.TryAdd(clean, originalName);
         }
     }
+
+    private static void AddNestedRoomCandidate(IDictionary<string, string> foundRooms, string originalName)
+    {
+        var normalized = originalName.ToLowerInvariant().Replace('-', '_');
+        if (FolderRoomMap.TryGetValue(normalized, out var mappedRoom))
+        {
+            foundRooms.TryAdd(mappedRoom, originalName);
+        }
+    }
+
+    private static int GetPreferredRoomRank(string roomName) =>
+        PreferredRoomOrder.TryGetValue(roomName, out var rank)
+            ? rank
+            : int.MaxValue;
 
     private static RoomDefinition GeneralRoom(string description) => new("general", description, []);
 }

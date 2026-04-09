@@ -1,7 +1,10 @@
-using System.Text;
 using System.Reflection;
+using System.Text.Json;
+using System.Text;
+using System.Diagnostics;
 using MemShack.Application.Chunking;
 using MemShack.Application.Compression;
+using MemShack.Application.Entities;
 using MemShack.Application.Extraction;
 using MemShack.Application.Layers;
 using MemShack.Application.Mining;
@@ -17,6 +20,7 @@ using MemShack.Core.Models;
 using MemShack.Core.Utilities;
 using MemShack.Infrastructure.Config;
 using MemShack.Infrastructure.Config.Projects;
+using MemShack.Infrastructure.VectorStore;
 using MemShack.Infrastructure.VectorStore.Collections;
 
 namespace MemShack.Cli;
@@ -24,6 +28,10 @@ namespace MemShack.Cli;
 public sealed class CliApp
 {
     private const string DefaultCommandName = "mems";
+    private static readonly JsonSerializerOptions EntityConfigJsonOptions = new()
+    {
+        WriteIndented = true,
+    };
     private static readonly string CurrentVersion = typeof(CliApp)
         .Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
@@ -44,6 +52,14 @@ public sealed class CliApp
         string[] args,
         TextWriter stdout,
         TextWriter stderr,
+        CancellationToken cancellationToken = default) =>
+        await RunAsync(args, Console.In, stdout, stderr, cancellationToken);
+
+    public async Task<int> RunAsync(
+        string[] args,
+        TextReader stdin,
+        TextWriter stdout,
+        TextWriter stderr,
         CancellationToken cancellationToken = default)
     {
         try
@@ -60,7 +76,7 @@ public sealed class CliApp
 
             return command switch
             {
-                "init" => await RunInitAsync(commandArgs, stdout, stderr, cancellationToken),
+                "init" => await RunInitAsync(commandArgs, stdin, stdout, stderr, cancellationToken),
                 "mine" => await RunMineAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "split" => await RunSplitAsync(commandArgs, stdout, stderr, cancellationToken),
                 "search" => await RunSearchAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
@@ -80,6 +96,7 @@ public sealed class CliApp
 
     private async Task<int> RunInitAsync(
         IReadOnlyList<string> args,
+        TextReader stdin,
         TextWriter stdout,
         TextWriter stderr,
         CancellationToken cancellationToken)
@@ -115,6 +132,8 @@ public sealed class CliApp
             return 1;
         }
 
+        await RunEntityDetectionAsync(projectDirectory, projectPath, yes, stdin, stdout, cancellationToken);
+
         var detector = new LocalRoomDetector();
         var scanner = new ProjectScanner();
         var rooms = detector.DetectRoomsFromFolders(projectPath);
@@ -129,28 +148,405 @@ public sealed class CliApp
         if (rooms.Count == 0)
         {
             rooms = [new RoomDefinition("general", "All project files", [])];
-            source = "fallback";
+            source = "fallback (flat project)";
         }
 
-        var fileCount = scanner.ScanProject(projectPath, respectGitignore: false).Count;
-        var projectName = NormalizeWingName(Path.GetFileName(projectPath));
+        var fileCount = scanner.ScanProject(projectPath).Count;
+        var projectName = NormalizeWingName(PathUtilities.GetLeafName(projectPath));
         var configPath = Path.Combine(projectPath, ConfigFileNames.MempalaceYaml);
 
-        await File.WriteAllTextAsync(configPath, RenderProjectConfig(projectName, rooms), cancellationToken);
-        var globalConfig = _configStore.Initialize(_configDirectory);
+        await PrintProposedStructureAsync(stdout, projectName, rooms, fileCount, source);
+        var approvedRooms = yes
+            ? rooms
+            : await ApproveRoomsAsync(rooms, stdin, stdout, cancellationToken);
 
-        await stdout.WriteLineAsync($"\n  MemShack Init");
-        await stdout.WriteLineAsync($"  Wing: {projectName}");
-        await stdout.WriteLineAsync($"  Rooms detected from {source}: {string.Join(", ", rooms.Select(room => room.Name))}");
-        await stdout.WriteLineAsync($"  Files found: {fileCount}");
-        if (yes)
+        await File.WriteAllTextAsync(configPath, RenderProjectConfig(projectName, approvedRooms), cancellationToken);
+        _configStore.Initialize(_configDirectory);
+
+        await stdout.WriteLineAsync($"\n  Config saved: {configPath}");
+        await stdout.WriteLineAsync("\n  Next step:");
+        await stdout.WriteLineAsync($"    {_commandName} mine {projectDirectory}");
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}\n");
+        return 0;
+    }
+
+    private static async Task RunEntityDetectionAsync(
+        string projectDirectory,
+        string projectPath,
+        bool yes,
+        TextReader stdin,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        var detector = new EntityDetector(includeCamelCaseCandidates: false);
+        await stdout.WriteLineAsync($"\n  Scanning for entities in: {projectDirectory}");
+
+        var files = detector.ScanForDetection(projectPath, prioritizeRelevantFiles: true);
+        if (files.Count == 0)
         {
-            await stdout.WriteLineAsync("  --yes supplied: auto-accepting detected rooms.");
+            return;
         }
 
-        await stdout.WriteLineAsync($"  Project config saved: {configPath}");
-        await stdout.WriteLineAsync($"  Global config initialized: {globalConfig}");
-        return 0;
+        await stdout.WriteLineAsync($"  Reading {files.Count} files...");
+        var detected = detector.DetectEntities(files);
+        var total = detected.People.Count + detected.Projects.Count + detected.Uncertain.Count;
+        if (total == 0)
+        {
+            await stdout.WriteLineAsync("  No entities detected \u2014 proceeding with directory-based rooms.");
+            return;
+        }
+
+        var confirmed = await ConfirmEntitiesAsync(detected, yes, stdin, stdout, cancellationToken);
+        if (!confirmed.HasAny)
+        {
+            return;
+        }
+
+        var entitiesPath = Path.Combine(projectPath, ConfigFileNames.EntitiesJson);
+        var entityConfig = new
+        {
+            people = confirmed.People,
+            projects = confirmed.Projects,
+            entities = BuildEntityCodes(confirmed.People, confirmed.Projects),
+            skip_names = Array.Empty<string>(),
+        };
+
+        await File.WriteAllTextAsync(
+            entitiesPath,
+            JsonSerializer.Serialize(entityConfig, EntityConfigJsonOptions),
+            cancellationToken);
+        await stdout.WriteLineAsync($"  Entities saved: {entitiesPath}");
+    }
+
+    private static async Task<ConfirmedEntities> ConfirmEntitiesAsync(
+        DetectedEntities detected,
+        bool yes,
+        TextReader stdin,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        await stdout.WriteLineAsync($"\n{new string('=', 58)}");
+        await stdout.WriteLineAsync("  MemShack - Entity Detection");
+        await stdout.WriteLineAsync(new string('=', 58));
+        await stdout.WriteLineAsync("\n  Scanned your files. Here's what we found:\n");
+
+        await PrintEntityListAsync(stdout, detected.People, "PEOPLE");
+        await PrintEntityListAsync(stdout, detected.Projects, "PROJECTS");
+
+        if (detected.Uncertain.Count > 0)
+        {
+            await PrintEntityListAsync(stdout, detected.Uncertain, "UNCERTAIN (need your call)");
+        }
+
+        var confirmedPeople = detected.People.Select(entity => entity.Name).ToList();
+        var confirmedProjects = detected.Projects.Select(entity => entity.Name).ToList();
+
+        if (yes)
+        {
+            await stdout.WriteLineAsync(
+                $"\n  Auto-accepting {confirmedPeople.Count} people, {confirmedProjects.Count} projects.");
+            return new ConfirmedEntities(confirmedPeople, confirmedProjects);
+        }
+
+        await stdout.WriteLineAsync($"\n{new string('\u2500', 58)}");
+        await stdout.WriteLineAsync("  Options:");
+        await stdout.WriteLineAsync("    [enter]  Accept all");
+        await stdout.WriteLineAsync("    [edit]   Remove wrong entries or reclassify uncertain");
+        await stdout.WriteLineAsync("    [add]    Add missing people or projects");
+        await stdout.WriteLineAsync();
+
+        var choice = (await PromptAsync(stdin, stdout, "  Your choice [enter/edit/add]: ", cancellationToken)).ToLowerInvariant();
+
+        if (choice == "edit")
+        {
+            if (detected.Uncertain.Count > 0)
+            {
+                await stdout.WriteLineAsync("\n  Uncertain entities \u2014 classify each:");
+                foreach (var entity in detected.Uncertain)
+                {
+                    var answer = (await PromptAsync(
+                        stdin,
+                        stdout,
+                        $"    {entity.Name} \u2014 (p)erson, (r)roject, or (s)kip? ",
+                        cancellationToken)).ToLowerInvariant();
+
+                    if (answer == "p")
+                    {
+                        confirmedPeople.Add(entity.Name);
+                    }
+                    else if (answer == "r")
+                    {
+                        confirmedProjects.Add(entity.Name);
+                    }
+                }
+            }
+
+            await PrintSelectionAsync(stdout, confirmedPeople, "Current people");
+            var removePeople = await PromptAsync(
+                stdin,
+                stdout,
+                "  Numbers to REMOVE from people (comma-separated, or enter to skip): ",
+                cancellationToken);
+            confirmedPeople = RemoveSelected(confirmedPeople, removePeople);
+
+            await PrintSelectionAsync(stdout, confirmedProjects, "Current projects");
+            var removeProjects = await PromptAsync(
+                stdin,
+                stdout,
+                "  Numbers to REMOVE from projects (comma-separated, or enter to skip): ",
+                cancellationToken);
+            confirmedProjects = RemoveSelected(confirmedProjects, removeProjects);
+        }
+
+        var addMissing = choice == "add";
+        if (!addMissing)
+        {
+            var answer = (await PromptAsync(stdin, stdout, "\n  Add any missing? [y/N]: ", cancellationToken)).ToLowerInvariant();
+            addMissing = answer == "y";
+        }
+
+        if (addMissing)
+        {
+            while (true)
+            {
+                var name = await PromptAsync(stdin, stdout, "  Name (or enter to stop): ", cancellationToken);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    break;
+                }
+
+                var kind = (await PromptAsync(
+                    stdin,
+                    stdout,
+                    $"  Is '{name}' a (p)erson or p(r)oject? ",
+                    cancellationToken)).ToLowerInvariant();
+                if (kind == "p")
+                {
+                    confirmedPeople.Add(name);
+                }
+                else if (kind == "r")
+                {
+                    confirmedProjects.Add(name);
+                }
+            }
+        }
+
+        confirmedPeople = confirmedPeople
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        confirmedProjects = confirmedProjects
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        await stdout.WriteLineAsync($"\n{new string('=', 58)}");
+        await stdout.WriteLineAsync("  Confirmed:");
+        await stdout.WriteLineAsync($"  People:   {FormatEntitySummary(confirmedPeople)}");
+        await stdout.WriteLineAsync($"  Projects: {FormatEntitySummary(confirmedProjects)}");
+        await stdout.WriteLineAsync($"{new string('=', 58)}\n");
+
+        return new ConfirmedEntities(confirmedPeople, confirmedProjects);
+    }
+
+    private static async Task PrintEntityListAsync(TextWriter stdout, IReadOnlyList<DetectedEntity> entities, string label)
+    {
+        await stdout.WriteLineAsync($"\n  {label}:");
+        if (entities.Count == 0)
+        {
+            await stdout.WriteLineAsync("    (none detected)");
+            return;
+        }
+
+        for (var index = 0; index < entities.Count; index++)
+        {
+            var entity = entities[index];
+            var signals = entity.Signals.Count > 0
+                ? string.Join(", ", entity.Signals.Take(2))
+                : string.Empty;
+            await stdout.WriteLineAsync(
+                $"    {index + 1,2}. {entity.Name,-20} [{RenderConfidenceBar(entity.Confidence)}] {signals}".TrimEnd());
+        }
+    }
+
+    private static async Task PrintSelectionAsync(TextWriter stdout, IReadOnlyList<string> values, string label)
+    {
+        await stdout.WriteLineAsync($"\n  {label}:");
+        if (values.Count == 0)
+        {
+            await stdout.WriteLineAsync("    (none)");
+            return;
+        }
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            await stdout.WriteLineAsync($"    {index + 1,2}. {values[index]}");
+        }
+    }
+
+    private static async Task PrintProposedStructureAsync(
+        TextWriter stdout,
+        string projectName,
+        IReadOnlyList<RoomDefinition> rooms,
+        int totalFiles,
+        string source)
+    {
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}");
+        await stdout.WriteLineAsync("  MemShack Init \u2014 Local setup");
+        await stdout.WriteLineAsync(new string('=', 55));
+        await stdout.WriteLineAsync($"\n  WING: {projectName}");
+        await stdout.WriteLineAsync($"  ({totalFiles} files found, rooms detected from {source})\n");
+
+        foreach (var room in rooms)
+        {
+            await stdout.WriteLineAsync($"    ROOM: {room.Name}");
+            await stdout.WriteLineAsync($"          {room.Description}");
+        }
+
+        await stdout.WriteLineAsync($"\n{new string('\u2500', 55)}");
+    }
+
+    private static async Task<IReadOnlyList<RoomDefinition>> ApproveRoomsAsync(
+        IReadOnlyList<RoomDefinition> rooms,
+        TextReader stdin,
+        TextWriter stdout,
+        CancellationToken cancellationToken)
+    {
+        await stdout.WriteLineAsync("  Review the proposed rooms above.");
+        await stdout.WriteLineAsync("  Options:");
+        await stdout.WriteLineAsync("    [enter]  Accept all rooms");
+        await stdout.WriteLineAsync("    [edit]   Remove or rename rooms");
+        await stdout.WriteLineAsync("    [add]    Add a room manually");
+        await stdout.WriteLineAsync();
+
+        var workingRooms = rooms.ToList();
+        var choice = (await PromptAsync(stdin, stdout, "  Your choice [enter/edit/add]: ", cancellationToken)).ToLowerInvariant();
+
+        if (choice == "edit")
+        {
+            await stdout.WriteLineAsync("\n  Current rooms:");
+            for (var index = 0; index < workingRooms.Count; index++)
+            {
+                await stdout.WriteLineAsync($"    {index + 1}. {workingRooms[index].Name} \u2014 {workingRooms[index].Description}");
+            }
+
+            var remove = await PromptAsync(
+                stdin,
+                stdout,
+                "\n  Room numbers to REMOVE (comma-separated, or enter to skip): ",
+                cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(remove))
+            {
+                var toRemove = remove
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(value => int.TryParse(value, out var parsed) ? parsed - 1 : -1)
+                    .Where(index => index >= 0)
+                    .ToHashSet();
+
+                workingRooms = workingRooms
+                    .Where((_, index) => !toRemove.Contains(index))
+                    .ToList();
+            }
+        }
+
+        var addMissing = choice == "add";
+        if (!addMissing)
+        {
+            var answer = (await PromptAsync(stdin, stdout, "\n  Add any missing rooms? [y/N]: ", cancellationToken)).ToLowerInvariant();
+            addMissing = answer == "y";
+        }
+
+        if (addMissing)
+        {
+            while (true)
+            {
+                var newName = (await PromptAsync(stdin, stdout, "  New room name (or enter to stop): ", cancellationToken))
+                    .ToLowerInvariant()
+                    .Replace(" ", "_", StringComparison.Ordinal);
+                if (string.IsNullOrWhiteSpace(newName))
+                {
+                    break;
+                }
+
+                var description = await PromptAsync(stdin, stdout, $"  Description for '{newName}': ", cancellationToken);
+                workingRooms.Add(new RoomDefinition(newName, description, [newName]));
+                await stdout.WriteLineAsync($"  Added: {newName}");
+            }
+        }
+
+        return workingRooms;
+    }
+
+    private static string RenderConfidenceBar(double confidence)
+    {
+        var filled = Math.Clamp((int)(confidence * 5), 0, 5);
+        return new string('\u25CF', filled) + new string('\u25CB', 5 - filled);
+    }
+
+    private static async Task<string> PromptAsync(
+        TextReader stdin,
+        TextWriter stdout,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        await stdout.WriteAsync(prompt);
+        await stdout.FlushAsync();
+        var response = await stdin.ReadLineAsync(cancellationToken);
+        return response?.Trim() ?? string.Empty;
+    }
+
+    private static List<string> RemoveSelected(IReadOnlyList<string> items, string rawIndexes)
+    {
+        if (string.IsNullOrWhiteSpace(rawIndexes))
+        {
+            return items.ToList();
+        }
+
+        var selected = rawIndexes
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => int.TryParse(value, out var parsed) ? parsed - 1 : -1)
+            .Where(index => index >= 0)
+            .ToHashSet();
+
+        return items
+            .Where((_, index) => !selected.Contains(index))
+            .ToList();
+    }
+
+    private static string FormatEntitySummary(IReadOnlyList<string> values) =>
+        values.Count == 0 ? "(none)" : string.Join(", ", values);
+
+    private static IReadOnlyDictionary<string, string> BuildEntityCodes(
+        IReadOnlyList<string> people,
+        IReadOnlyList<string> projects)
+    {
+        var codes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in people.Concat(projects))
+        {
+            if (string.IsNullOrWhiteSpace(name) || codes.ContainsKey(name))
+            {
+                continue;
+            }
+
+            var normalized = name.Trim();
+            var codeLength = Math.Min(normalized.Length, 3);
+            var code = normalized[..codeLength].ToUpperInvariant();
+            var index = Math.Min(normalized.Length, 4);
+
+            while (codes.Values.Contains(code, StringComparer.Ordinal))
+            {
+                code = normalized[..Math.Min(normalized.Length, index)].ToUpperInvariant();
+                index = Math.Min(normalized.Length, index + 1);
+                if (index == normalized.Length && codes.Values.Contains(code, StringComparer.Ordinal))
+                {
+                    code = $"{code}{codes.Count + 1}";
+                    break;
+                }
+            }
+
+            codes[normalized] = code;
+        }
+
+        return codes;
     }
 
     private async Task<int> RunMineAsync(
@@ -214,23 +610,60 @@ public sealed class CliApp
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
         var store = CreateVectorStore(palacePath);
-        var result = string.Equals(mode, "convos", StringComparison.Ordinal)
-            ? await new ConversationMiner(
-                    new TranscriptNormalizer(new TranscriptSpellchecker(_configDirectory)),
-                    new ConversationChunker(),
-                    new GeneralMemoryExtractor(),
-                    store)
-                .MineAsync(directory, wing, agent, limit, dryRun, extract, cancellationToken: cancellationToken)
-            : await new ProjectMiner(
-                    new YamlProjectPalaceConfigLoader(),
-                    new ProjectScanner(),
-                    new TextChunker(),
-                    store)
-                .MineAsync(directory, wing, agent, limit, dryRun, !noGitignore, ExpandIncludeIgnored(includeIgnored), cancellationToken: cancellationToken);
+        var progressReporter = string.Equals(mode, "projects", StringComparison.Ordinal)
+            ? null
+            : CreateMiningProgressReporter(stdout);
+        Action<MiningProgressUpdate>? progress = progressReporter is null ? null : progressReporter.Report;
+        MiningRunResult result;
+        try
+        {
+            result = string.Equals(mode, "convos", StringComparison.Ordinal)
+                ? await new ConversationMiner(
+                        new TranscriptNormalizer(new TranscriptSpellchecker(_configDirectory)),
+                        new ConversationChunker(),
+                        new GeneralMemoryExtractor(),
+                        store)
+                    .MineAsync(directory, wing, agent, limit, dryRun, extract, progress: progress, cancellationToken: cancellationToken)
+                : await new ProjectMiner(
+                        new YamlProjectPalaceConfigLoader(),
+                        new ProjectScanner(),
+                        new TextChunker(),
+                        store)
+                    .MineAsync(directory, wing, agent, limit, dryRun, !noGitignore, ExpandIncludeIgnored(includeIgnored), progress: progress, cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            if (progressReporter is not null)
+            {
+                await progressReporter.ClearAsync();
+            }
+        }
+
+        if (string.Equals(mode, "projects", StringComparison.Ordinal))
+        {
+            await WriteProjectMineOutputAsync(
+                directory,
+                wing,
+                noGitignore,
+                includeIgnored,
+                palacePath,
+                result,
+                stdout);
+            return 0;
+        }
 
         await stdout.WriteLineAsync($"\n  MemShack Mine");
         await stdout.WriteLineAsync($"  Mode: {mode}");
         await stdout.WriteLineAsync($"  Palace: {palacePath}");
+        if (store is ChromaCompatibilityVectorStore compatibilityStore)
+        {
+            var collectionPath = Path.Combine(compatibilityStore.CollectionsPath, $"{CollectionNames.Drawers}.json");
+            await stdout.WriteLineAsync($"  Collection file: {collectionPath}");
+        }
+        else if (store is ChromaHttpVectorStore chromaStore)
+        {
+            await stdout.WriteLineAsync($"  Chroma URL: {chromaStore.BaseUrl}");
+        }
         await stdout.WriteLineAsync($"  Files: {result.FilesDiscovered}");
         await stdout.WriteLineAsync($"  Files processed: {result.FilesProcessed}");
         await stdout.WriteLineAsync($"  Files skipped: {result.FilesSkipped}");
@@ -246,6 +679,82 @@ public sealed class CliApp
         }
 
         return 0;
+    }
+
+    private async Task WriteProjectMineOutputAsync(
+        string directory,
+        string? wingOverride,
+        bool noGitignore,
+        IReadOnlyList<string> includeIgnored,
+        string palacePath,
+        MiningRunResult result,
+        TextWriter stdout)
+    {
+        var config = new YamlProjectPalaceConfigLoader().Load(directory);
+        var wing = string.IsNullOrWhiteSpace(wingOverride) ? config.Wing : wingOverride;
+
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}");
+        await stdout.WriteLineAsync("  MemShack Mine");
+        await stdout.WriteLineAsync(new string('=', 55));
+        await stdout.WriteLineAsync($"  Wing:    {wing}");
+        await stdout.WriteLineAsync($"  Rooms:   {string.Join(", ", config.Rooms.Select(room => room.Name))}");
+        await stdout.WriteLineAsync($"  Files:   {result.FilesDiscovered}");
+        await stdout.WriteLineAsync($"  Palace:  {palacePath}");
+        if (result.DryRun)
+        {
+            await stdout.WriteLineAsync("  DRY RUN - nothing will be filed");
+        }
+
+        if (noGitignore)
+        {
+            await stdout.WriteLineAsync("  .gitignore: DISABLED");
+        }
+
+        var included = ExpandIncludeIgnored(includeIgnored).ToArray();
+        if (included.Length > 0)
+        {
+            await stdout.WriteLineAsync($"  Include: {string.Join(", ", included.OrderBy(value => value, StringComparer.Ordinal))}");
+        }
+
+        await stdout.WriteLineAsync(new string('\u2500', 55));
+        await stdout.WriteLineAsync();
+
+        if (result.DryRun)
+        {
+            foreach (var file in result.FileResults)
+            {
+                await stdout.WriteLineAsync(
+                    $"    [DRY RUN] {Path.GetFileName(file.SourceFile)} -> room:{file.Room} ({file.DrawersFiled} drawers)");
+            }
+        }
+        else
+        {
+            foreach (var file in result.FileResults)
+            {
+                var fileName = Path.GetFileName(file.SourceFile);
+                if (fileName.Length > 50)
+                {
+                    fileName = fileName[..50];
+                }
+
+                await stdout.WriteLineAsync(
+                    $"  \u2713 [{file.FileIndex,4}/{result.FilesDiscovered}] {fileName,-50} +{file.DrawersFiled}");
+            }
+        }
+
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}");
+        await stdout.WriteLineAsync("  Done.");
+        await stdout.WriteLineAsync($"  Files processed: {result.FilesProcessed}");
+        await stdout.WriteLineAsync($"  Files skipped (already filed): {result.FilesSkipped}");
+        await stdout.WriteLineAsync($"  Drawers filed: {result.DrawersFiled}");
+        await stdout.WriteLineAsync("\n  By room:");
+        foreach (var room in result.RoomCounts.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            await stdout.WriteLineAsync($"    {room.Key,-20} {room.Value} files");
+        }
+
+        await stdout.WriteLineAsync($"\n  Next: {_commandName} search \"what you're looking for\"");
+        await stdout.WriteLineAsync($"{new string('=', 55)}\n");
     }
 
     private async Task<int> RunSplitAsync(
@@ -582,26 +1091,37 @@ public sealed class CliApp
         }
 
         var backupPath = $"{palacePath}.backup";
-        if (Directory.Exists(backupPath))
+        if (store is ChromaCompatibilityVectorStore)
         {
-            Directory.Delete(backupPath, recursive: true);
+            if (Directory.Exists(backupPath))
+            {
+                Directory.Delete(backupPath, recursive: true);
+            }
+
+            CopyDirectory(palacePath, backupPath);
         }
 
-        CopyDirectory(palacePath, backupPath);
         await stdout.WriteLineAsync($"\n  MemShack Repair");
         await stdout.WriteLineAsync($"  Palace: {palacePath}");
-        await stdout.WriteLineAsync($"  Backup: {backupPath}");
+        if (store is ChromaCompatibilityVectorStore)
+        {
+            await stdout.WriteLineAsync($"  Backup: {backupPath}");
+        }
+        else if (store is ChromaHttpVectorStore chromaStore)
+        {
+            await stdout.WriteLineAsync($"  Chroma URL: {chromaStore.BaseUrl}");
+            await stdout.WriteLineAsync("  Backup: not available for HTTP-backed Chroma stores");
+        }
 
         foreach (var collection in collections)
         {
             var drawers = await store.GetDrawersAsync(collection, cancellationToken: cancellationToken);
-            var collectionFile = Path.Combine(store.CollectionsPath, $"{collection}.json");
-            if (File.Exists(collectionFile))
+            await store.EnsureCollectionAsync(collection, cancellationToken);
+            foreach (var drawer in drawers)
             {
-                File.Delete(collectionFile);
+                await store.DeleteDrawerAsync(collection, drawer.Id, cancellationToken);
             }
 
-            await store.EnsureCollectionAsync(collection, cancellationToken);
             foreach (var drawer in drawers.OrderBy(drawer => drawer.Id, StringComparer.Ordinal))
             {
                 await store.AddDrawerAsync(collection, drawer, cancellationToken);
@@ -630,7 +1150,21 @@ public sealed class CliApp
     private static IEnumerable<string> ExpandIncludeIgnored(IEnumerable<string> rawValues) =>
         rawValues.SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    private ChromaCompatibilityVectorStore CreateVectorStore(string palacePath) => new(palacePath);
+    private IVectorStore CreateVectorStore(string palacePath)
+    {
+        var config = _configStore.Load(_configDirectory) with { PalacePath = palacePath };
+        return VectorStoreFactory.Create(config);
+    }
+
+    private static MiningProgressReporter? CreateMiningProgressReporter(TextWriter writer)
+    {
+        if (!ReferenceEquals(writer, Console.Out) || Console.IsOutputRedirected)
+        {
+            return null;
+        }
+
+        return new MiningProgressReporter(writer);
+    }
 
     private string ResolvePalacePath(string? palacePath)
     {
@@ -755,6 +1289,76 @@ public sealed class CliApp
         (string.Equals(args[0], "--help", StringComparison.Ordinal) ||
          string.Equals(args[0], "-h", StringComparison.Ordinal) ||
          string.Equals(args[0], "help", StringComparison.Ordinal));
+
+    private sealed class MiningProgressReporter
+    {
+        private const string ClearLine = "\u001b[2K\r";
+        private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(100);
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+        private readonly TextWriter _writer;
+        private TimeSpan _lastRender = TimeSpan.MinValue;
+        private bool _rendered;
+
+        public MiningProgressReporter(TextWriter writer)
+        {
+            _writer = writer;
+        }
+
+        public void Report(MiningProgressUpdate update)
+        {
+            if (!_ShouldRender(update))
+            {
+                return;
+            }
+
+            var message = $"{ClearLine}  {update.FilesProcessed}/{update.FilesDiscovered} files processed";
+            if (update.DrawersFiled > 0)
+            {
+                message += $" | {update.DrawersFiled} drawers filed";
+            }
+
+            if (update.FilesSkipped > 0 && !update.DryRun)
+            {
+                message += $" | {update.FilesSkipped} skipped";
+            }
+
+            _writer.Write(message);
+            _writer.Flush();
+            _lastRender = _stopwatch.Elapsed;
+            _rendered = true;
+        }
+
+        public async Task ClearAsync()
+        {
+            if (!_rendered)
+            {
+                return;
+            }
+
+            await _writer.WriteAsync(ClearLine);
+            await _writer.FlushAsync();
+        }
+
+        private bool _ShouldRender(MiningProgressUpdate update)
+        {
+            if (update.FilesProcessed >= update.FilesDiscovered)
+            {
+                return true;
+            }
+
+            if (!_rendered)
+            {
+                return true;
+            }
+
+            return _stopwatch.Elapsed - _lastRender >= RenderInterval;
+        }
+    }
+
+    private sealed record ConfirmedEntities(IReadOnlyList<string> People, IReadOnlyList<string> Projects)
+    {
+        public bool HasAny => People.Count > 0 || Projects.Count > 0;
+    }
 
     private sealed record GlobalOptions(string? PalacePath);
 

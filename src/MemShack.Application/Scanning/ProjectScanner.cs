@@ -42,6 +42,8 @@ public sealed class ProjectScanner : IProjectScanner
         ".next",
         "coverage",
         ".mempalace",
+        ".dotnet",
+        ".nuget",
         ".ruff_cache",
         ".mypy_cache",
         ".pytest_cache",
@@ -54,6 +56,8 @@ public sealed class ProjectScanner : IProjectScanner
         ".eggs",
         "htmlcov",
         "target",
+        "bin",
+        "obj",
     ];
 
     private static readonly HashSet<string> SkipFilenames =
@@ -76,7 +80,6 @@ public sealed class ProjectScanner : IProjectScanner
         var includePaths = PathUtilities.NormalizeIncludePaths(includeIgnored);
 
         Walk(projectPath, respectGitignore ? [] : null);
-        files.Sort(StringComparer.Ordinal);
         return files;
 
         void Walk(string currentDirectory, IReadOnlyList<GitignoreMatcher>? activeMatchers)
@@ -91,7 +94,9 @@ public sealed class ProjectScanner : IProjectScanner
                 }
             }
 
-            foreach (var directory in Directory.EnumerateDirectories(currentDirectory).OrderBy(path => path, StringComparer.Ordinal))
+            var directories = new List<string>();
+
+            foreach (var directory in Directory.EnumerateDirectories(currentDirectory))
             {
                 var name = Path.GetFileName(directory);
                 var forceInclude = IsForceIncluded(directory, projectPath, includePaths);
@@ -106,10 +111,10 @@ public sealed class ProjectScanner : IProjectScanner
                     continue;
                 }
 
-                Walk(directory, matchers);
+                directories.Add(directory);
             }
 
-            foreach (var file in Directory.EnumerateFiles(currentDirectory).OrderBy(path => path, StringComparer.Ordinal))
+            foreach (var file in Directory.EnumerateFiles(currentDirectory))
             {
                 var fileName = Path.GetFileName(file);
                 var extension = Path.GetExtension(file);
@@ -133,6 +138,11 @@ public sealed class ProjectScanner : IProjectScanner
                 }
 
                 files.Add(Path.GetFullPath(file));
+            }
+
+            foreach (var directory in directories)
+            {
+                Walk(directory, matchers);
             }
         }
     }

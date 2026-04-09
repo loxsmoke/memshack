@@ -32,6 +32,7 @@ public sealed class ProjectMiner
         bool respectGitignore = true,
         IEnumerable<string>? includeIgnored = null,
         string collectionName = CollectionNames.Drawers,
+        Action<MiningProgressUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var projectPath = Path.GetFullPath(projectDirectory);
@@ -50,10 +51,13 @@ public sealed class ProjectMiner
 
         var totalDrawers = 0;
         var filesSkipped = 0;
+        var filesProcessed = 0;
         var roomCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var fileResults = new List<MiningFileResult>();
 
-        foreach (var file in files)
+        for (var index = 0; index < files.Count; index++)
         {
+            var file = files[index];
             var result = await ProcessFileAsync(
                 file,
                 projectPath,
@@ -67,16 +71,23 @@ public sealed class ProjectMiner
             if (result.DrawersAdded == 0 && !dryRun)
             {
                 filesSkipped++;
+                filesProcessed++;
+                progress?.Invoke(new MiningProgressUpdate(filesProcessed, files.Count, filesSkipped, totalDrawers, dryRun));
                 continue;
             }
 
             totalDrawers += result.DrawersAdded;
             if (result.DrawersAdded > 0)
             {
-                roomCounts[result.Room] = roomCounts.TryGetValue(result.Room, out var count)
+                var summaryRoom = DetectRoom(file, string.Empty, config.Rooms, projectPath);
+                roomCounts[summaryRoom] = roomCounts.TryGetValue(summaryRoom, out var count)
                     ? count + 1
                     : 1;
+                fileResults.Add(new MiningFileResult(index + 1, file, result.Room, result.DrawersAdded));
             }
+
+            filesProcessed++;
+            progress?.Invoke(new MiningProgressUpdate(filesProcessed, files.Count, filesSkipped, totalDrawers, dryRun));
         }
 
         return new MiningRunResult(
@@ -85,6 +96,7 @@ public sealed class ProjectMiner
             filesSkipped,
             totalDrawers,
             roomCounts,
+            fileResults,
             dryRun);
     }
 

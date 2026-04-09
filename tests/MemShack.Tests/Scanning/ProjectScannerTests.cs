@@ -72,6 +72,22 @@ public sealed class ProjectScannerTests
         Assert.Equal([".pytest_cache/cache.py"], files);
     }
 
+    [TestMethod]
+    public void ScanProject_ProcessesCurrentDirectoryFilesBeforeDescending()
+    {
+        using var temp = new TemporaryDirectory();
+        temp.WriteFile("root.md", "# Root\n" + new string('r', 80));
+        temp.WriteFile("nested/child.md", "# Child\n" + new string('c', 80));
+
+        var files = _scanner.ScanProject(temp.Root, respectGitignore: false)
+            .Select(path => Path.GetRelativePath(temp.Root, path).Replace('\\', '/'))
+            .ToArray();
+
+        Assert.Equal(2, files.Length);
+        Assert.Equal("root.md", files[0]);
+        Assert.Equal("nested/child.md", files[1]);
+    }
+
     private IReadOnlyList<string> ScanRelative(
         string projectRoot,
         bool respectGitignore = true,

@@ -28,6 +28,23 @@ public sealed class FileConfigStore : IConfigStore
             ?? fileConfig?[ "palace_path" ]?.GetValue<string>()
             ?? MempalaceDefaults.GetDefaultPalacePath(homeDirectory);
 
+        var chromaUrl = Environment.GetEnvironmentVariable("MEMPALACE_CHROMA_URL")
+            ?? Environment.GetEnvironmentVariable("MEMPAL_CHROMA_URL")
+            ?? Environment.GetEnvironmentVariable("MEMSHACK_CHROMA_URL")
+            ?? fileConfig?["chroma_url"]?.GetValue<string>();
+
+        var chromaTenant = Environment.GetEnvironmentVariable("MEMPALACE_CHROMA_TENANT")
+            ?? Environment.GetEnvironmentVariable("MEMPAL_CHROMA_TENANT")
+            ?? Environment.GetEnvironmentVariable("MEMSHACK_CHROMA_TENANT")
+            ?? fileConfig?["chroma_tenant"]?.GetValue<string>()
+            ?? "default_tenant";
+
+        var chromaDatabase = Environment.GetEnvironmentVariable("MEMPALACE_CHROMA_DATABASE")
+            ?? Environment.GetEnvironmentVariable("MEMPAL_CHROMA_DATABASE")
+            ?? Environment.GetEnvironmentVariable("MEMSHACK_CHROMA_DATABASE")
+            ?? fileConfig?["chroma_database"]?.GetValue<string>()
+            ?? "default_database";
+
         var collectionName = fileConfig?["collection_name"]?.GetValue<string>() ?? CollectionNames.Drawers;
         var peopleMap = ReadStringDictionary(peopleMapFile) ?? ReadStringDictionary(fileConfig?["people_map"]) ?? new Dictionary<string, string>(StringComparer.Ordinal);
         var topicWings = ReadStringList(fileConfig?["topic_wings"]) ?? MempalaceDefaults.TopicWings.ToArray();
@@ -38,7 +55,10 @@ public sealed class FileConfigStore : IConfigStore
             collectionName,
             peopleMap,
             topicWings,
-            hallKeywords);
+            hallKeywords,
+            chromaUrl,
+            chromaTenant,
+            chromaDatabase);
     }
 
     public string Initialize(string? configDirectory = null)

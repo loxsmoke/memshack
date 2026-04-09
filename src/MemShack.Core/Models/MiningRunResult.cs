@@ -6,4 +6,5 @@ public sealed record MiningRunResult(
     int FilesSkipped,
     int DrawersFiled,
     IReadOnlyDictionary<string, int> RoomCounts,
+    IReadOnlyList<MiningFileResult> FileResults,
     bool DryRun);

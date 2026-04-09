@@ -85,4 +85,23 @@ public sealed class FileConfigStoreTests
         Assert.Equal(MempalaceDefaults.TopicWings, snapshot.TopicWings);
         Assert.Empty(snapshot.PeopleMap);
     }
+
+    [TestMethod]
+    public void Load_ReadsOptionalChromaSettings()
+    {
+        using var temp = new TemporaryDirectory();
+        temp.WriteFile(ConfigFileNames.ConfigJson, """
+            {
+              "chroma_url": "http://localhost:8000",
+              "chroma_tenant": "tenant_a",
+              "chroma_database": "database_a"
+            }
+            """);
+
+        var snapshot = _store.Load(temp.Root);
+
+        Assert.Equal("http://localhost:8000", snapshot.ChromaUrl);
+        Assert.Equal("tenant_a", snapshot.ChromaTenant);
+        Assert.Equal("database_a", snapshot.ChromaDatabase);
+    }
 }

@@ -41,6 +41,7 @@ public sealed class ProjectMinerIntegrationTests
 
         Assert.True(result.DrawersFiled > 0);
         Assert.Single(result.RoomCounts);
+        Assert.Single(result.FileResults);
         Assert.Equal("backend", drawers[0].Metadata.Room);
         Assert.Equal("test_project", drawers[0].Metadata.Wing);
         Assert.Equal("mempalace", drawers[0].Metadata.AddedBy);
@@ -81,5 +82,40 @@ public sealed class ProjectMinerIntegrationTests
         Assert.Equal(firstRun.DrawersFiled, drawers.Count);
         Assert.Equal(0, secondRun.DrawersFiled);
         Assert.True(secondRun.FilesSkipped > 0);
+    }
+
+    [TestMethod]
+    public async Task RoomCountsFollowPythonPathOnlySummaryBehavior()
+    {
+        using var temp = new TemporaryDirectory();
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "mempalace.yaml"), """
+            wing: docs_project
+            rooms:
+              - name: documentation
+                description: Docs
+                keywords:
+                  - docs
+              - name: general
+                description: General
+            """);
+        File.WriteAllText(
+            Path.Combine(projectRoot, "README.md"),
+            string.Join('\n', Enumerable.Repeat("documentation docs guide reference", 40)));
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var miner = new ProjectMiner(
+            new YamlProjectPalaceConfigLoader(),
+            new ProjectScanner(),
+            new TextChunker(),
+            store);
+
+        var result = await miner.MineAsync(projectRoot);
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.Single(result.RoomCounts);
+        Assert.True(result.RoomCounts.ContainsKey("general"));
+        Assert.Equal("documentation", drawers[0].Metadata.Room);
     }
 }

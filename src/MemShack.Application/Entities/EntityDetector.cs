@@ -4,6 +4,13 @@ namespace MemShack.Application.Entities;
 
 public sealed class EntityDetector
 {
+    private readonly bool _includeCamelCaseCandidates;
+
+    public EntityDetector(bool includeCamelCaseCandidates = true)
+    {
+        _includeCamelCaseCandidates = includeCamelCaseCandidates;
+    }
+
     private static readonly string[] PersonVerbPatterns =
     [
         @"\b{name}\s+said\b",
@@ -105,9 +112,10 @@ public sealed class EntityDetector
     private static readonly HashSet<string> SkipDirectories =
     [
         ".git", "node_modules", "__pycache__", ".venv", "venv", "env", "dist", "build", ".next", "coverage", ".mempalace",
+        ".dotnet", ".nuget", "bin", "obj",
     ];
 
-    public IReadOnlyList<string> ScanForDetection(string projectDirectory, int maxFiles = 10)
+    public IReadOnlyList<string> ScanForDetection(string projectDirectory, int maxFiles = 10, bool prioritizeRelevantFiles = false)
     {
         var projectPath = Path.GetFullPath(projectDirectory);
         var proseFiles = new List<string>();
@@ -115,7 +123,16 @@ public sealed class EntityDetector
 
         ScanDirectory(projectPath, proseFiles, readableFiles);
         var files = proseFiles.Count >= 3 ? proseFiles : proseFiles.Concat(readableFiles);
-        return files.Take(maxFiles).ToArray();
+        if (!prioritizeRelevantFiles)
+        {
+            return files.Take(maxFiles).ToArray();
+        }
+
+        return files
+            .OrderByDescending(filePath => ScoreDetectionFile(projectPath, filePath))
+            .ThenBy(filePath => filePath, StringComparer.OrdinalIgnoreCase)
+            .Take(maxFiles)
+            .ToArray();
     }
 
     public DetectedEntities DetectEntities(IEnumerable<string> filePaths, int maxFiles = 10)
@@ -248,15 +265,18 @@ public sealed class EntityDetector
             counts[phrase] = counts.TryGetValue(phrase, out var count) ? count + 1 : 1;
         }
 
-        foreach (Match match in Regex.Matches(text, @"\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b"))
+        if (_includeCamelCaseCandidates)
         {
-            var phrase = match.Groups[1].Value;
-            if (Stopwords.Contains(phrase.ToLowerInvariant()))
+            foreach (Match match in Regex.Matches(text, @"\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b"))
             {
-                continue;
-            }
+                var phrase = match.Groups[1].Value;
+                if (Stopwords.Contains(phrase.ToLowerInvariant()))
+                {
+                    continue;
+                }
 
-            counts[phrase] = counts.TryGetValue(phrase, out var count) ? count + 1 : 1;
+                counts[phrase] = counts.TryGetValue(phrase, out var count) ? count + 1 : 1;
+            }
         }
 
         return counts
@@ -386,7 +406,7 @@ public sealed class EntityDetector
 
         if (personRatio >= 0.7)
         {
-            return new DetectedEntity(name, "uncertain", 0.4, frequency, scores.PersonSignals.Concat([$"appears {frequency}x - pronoun-only match"]).ToArray());
+            return new DetectedEntity(name, "uncertain", 0.4, frequency, scores.PersonSignals.Concat([$"appears {frequency}x \u2014 pronoun-only match"]).ToArray());
         }
 
         if (personRatio <= 0.3)
@@ -394,21 +414,11 @@ public sealed class EntityDetector
             return new DetectedEntity(name, "project", Math.Round(Math.Min(0.99, 0.5 + (1 - personRatio) * 0.5), 2), frequency, scores.ProjectSignals.Count > 0 ? scores.ProjectSignals : [$"appears {frequency}x"]);
         }
 
-        return new DetectedEntity(name, "uncertain", 0.5, frequency, scores.PersonSignals.Concat(scores.ProjectSignals).Take(3).Concat(["mixed signals - needs review"]).ToArray());
+        return new DetectedEntity(name, "uncertain", 0.5, frequency, scores.PersonSignals.Concat(scores.ProjectSignals).Take(3).Concat(["mixed signals \u2014 needs review"]).ToArray());
     }
 
     private static void ScanDirectory(string directory, ICollection<string> proseFiles, ICollection<string> readableFiles)
     {
-        foreach (var childDirectory in Directory.EnumerateDirectories(directory))
-        {
-            if (SkipDirectories.Contains(Path.GetFileName(childDirectory)))
-            {
-                continue;
-            }
-
-            ScanDirectory(childDirectory, proseFiles, readableFiles);
-        }
-
         foreach (var file in Directory.EnumerateFiles(directory))
         {
             var extension = Path.GetExtension(file).ToLowerInvariant();
@@ -421,6 +431,94 @@ public sealed class EntityDetector
                 readableFiles.Add(file);
             }
         }
+
+        foreach (var childDirectory in Directory.EnumerateDirectories(directory))
+        {
+            if (SkipDirectories.Contains(Path.GetFileName(childDirectory)))
+            {
+                continue;
+            }
+
+            ScanDirectory(childDirectory, proseFiles, readableFiles);
+        }
+    }
+
+    private static int ScoreDetectionFile(string projectPath, string filePath)
+    {
+        var relativePath = Path.GetRelativePath(projectPath, filePath);
+        var segments = relativePath
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
+            .ToArray();
+        var fileName = Path.GetFileNameWithoutExtension(filePath).ToLowerInvariant();
+        var score = 0;
+
+        score -= segments.Length * 5;
+
+        if (segments.Length == 1)
+        {
+            score += 100;
+        }
+
+        if (fileName == "readme")
+        {
+            score += 90;
+        }
+
+        if (fileName.Contains("migration", StringComparison.Ordinal))
+        {
+            score += 75;
+        }
+
+        if (fileName.Contains("tool", StringComparison.Ordinal) || fileName.Contains("install", StringComparison.Ordinal))
+        {
+            score += 60;
+        }
+
+        if (fileName.Contains("roadmap", StringComparison.Ordinal) || fileName.Contains("architecture", StringComparison.Ordinal))
+        {
+            score += 45;
+        }
+
+        if (segments.Any(segment => string.Equals(segment, "notes", StringComparison.OrdinalIgnoreCase)))
+        {
+            score += 40;
+        }
+
+        if (segments.Any(segment => string.Equals(segment, ".github", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 150;
+        }
+
+        if (segments.Any(segment =>
+                string.Equals(segment, "compatibility", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(segment, "validation", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 120;
+        }
+
+        if (segments.Any(segment =>
+                string.Equals(segment, ".dotnet", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(segment, ".nuget", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 120;
+        }
+
+        if (segments.Any(segment =>
+                string.Equals(segment, "benchmarks", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(segment, "examples", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 80;
+        }
+
+        if (segments.Any(segment => string.Equals(segment, "fixtures", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 10;
+        }
+
+        return score;
     }
 }
 

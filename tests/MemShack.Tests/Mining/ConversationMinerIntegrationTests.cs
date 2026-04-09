@@ -68,6 +68,34 @@ public sealed class ConversationMinerIntegrationTests
     }
 
     [TestMethod]
+    public async Task MineAsync_WithoutWing_UsesDirectoryNameWhenPathHasTrailingSeparator()
+    {
+        using var temp = new TemporaryDirectory();
+        var convoRoot = temp.GetPath("chat-logs");
+        Directory.CreateDirectory(convoRoot);
+        File.WriteAllText(Path.Combine(convoRoot, "chat.txt"), """
+            > What changed?
+            We fixed the broken refresh token flow.
+
+            > What next?
+            Add tests and update docs.
+            """);
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var miner = new ConversationMiner(
+            new TranscriptNormalizer(),
+            new ConversationChunker(),
+            new GeneralMemoryExtractor(),
+            store);
+
+        var result = await miner.MineAsync(convoRoot + Path.DirectorySeparatorChar);
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.True(result.DrawersFiled > 0);
+        Assert.All(drawers, drawer => Assert.Equal("chat_logs", drawer.Metadata.Wing));
+    }
+
+    [TestMethod]
     public void ScanConversationFiles_SkipsMetaJsonAndIgnoredFolders()
     {
         using var temp = new TemporaryDirectory();

@@ -46,6 +46,33 @@ public static class PathUtilities
         return path;
     }
 
+    public static string GetLeafName(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var fullPath = Path.GetFullPath(ExpandHome(path));
+        var trimmedPath = Path.TrimEndingDirectorySeparator(fullPath);
+        var leafName = Path.GetFileName(trimmedPath);
+        if (!string.IsNullOrWhiteSpace(leafName))
+        {
+            return leafName;
+        }
+
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return string.Empty;
+        }
+
+        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedRoot.EndsWith(":", StringComparison.Ordinal)
+            ? $"{char.ToLowerInvariant(normalizedRoot[0])}_drive"
+            : "root";
+    }
+
     public static string ToPosixPath(string path) => path.Replace('\\', '/');
 
     public static string ToProjectRelativePosixPath(string projectPath, string targetPath)

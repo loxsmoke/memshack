@@ -23,6 +23,41 @@ public sealed class LocalRoomDetectorTests
     }
 
     [TestMethod]
+    public void DetectRoomsFromFolders_DoesNotAddArbitraryNestedDirectories()
+    {
+        using var temp = new TemporaryDirectory();
+        Directory.CreateDirectory(temp.GetPath("src", "My.Feature"));
+        Directory.CreateDirectory(temp.GetPath("docs", "compatibility"));
+
+        var rooms = _detector.DetectRoomsFromFolders(temp.Root);
+
+        Assert.Contains(rooms, room => room.Name == "src");
+        Assert.Contains(rooms, room => room.Name == "documentation");
+        Assert.DoesNotContain(rooms, room => room.Name == "my.feature");
+        Assert.DoesNotContain(rooms, room => room.Name == "compatibility");
+    }
+
+    [TestMethod]
+    public void DetectRoomsFromFolders_UsesPythonStyleDisplayOrder()
+    {
+        using var temp = new TemporaryDirectory();
+        Directory.CreateDirectory(temp.GetPath("assets"));
+        Directory.CreateDirectory(temp.GetPath("docs"));
+        Directory.CreateDirectory(temp.GetPath("fixtures"));
+        Directory.CreateDirectory(temp.GetPath("src"));
+        Directory.CreateDirectory(temp.GetPath("tests"));
+        Directory.CreateDirectory(temp.GetPath("tools"));
+
+        var rooms = _detector.DetectRoomsFromFolders(temp.Root)
+            .Select(room => room.Name)
+            .ToArray();
+
+        Assert.Equal(
+            ["src", "design", "scripts", "fixtures", "testing", "documentation", "general"],
+            rooms);
+    }
+
+    [TestMethod]
     public void DetectRoomsFromFiles_FallsBackToRecurringFilenamePatterns()
     {
         using var temp = new TemporaryDirectory();
