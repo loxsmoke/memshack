@@ -104,4 +104,73 @@ public sealed class ChromaCompatibilityVectorStoreTests
         Assert.True(deleted);
         Assert.Empty(await store.GetDrawersAsync(CollectionNames.Drawers));
     }
+
+    [TestMethod]
+    public async Task SourceFileChecksRespectStoredSourceMtime()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var sourceFile = temp.GetPath("src", "app.py");
+        var sourceMtimeUtcMs = 1_744_156_800_000L;
+
+        await store.AddDrawerAsync(
+            CollectionNames.Drawers,
+            new DrawerRecord(
+                "drawer_project_backend_1",
+                "JWT authentication tokens are stored with refresh cookies",
+                new DrawerMetadata
+                {
+                    Wing = "project",
+                    Room = "backend",
+                    SourceFile = sourceFile,
+                    SourceMtimeUtcMs = sourceMtimeUtcMs,
+                    ChunkIndex = 0,
+                    AddedBy = "test",
+                    FiledAt = "2026-04-07T12:00:00",
+                    EmbeddingSignature = EmbeddingSignatures.Current,
+                }));
+
+        var hasMatchingMtime = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs);
+        var hasStaleMtime = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs + 1);
+
+        Assert.True(hasMatchingMtime);
+        Assert.False(hasStaleMtime);
+    }
+
+    [TestMethod]
+    public async Task SearchAndEnumeration_StayStableAcrossLargerCollections()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+
+        for (var index = 0; index < 60; index++)
+        {
+            var room = index % 2 == 0 ? "backend" : "docs";
+            var text = index == 42
+                ? "needle keyword unique phrase for ranked retrieval"
+                : $"background context chunk {index} with general project notes";
+            await store.AddDrawerAsync(
+                CollectionNames.Drawers,
+                new DrawerRecord(
+                    $"drawer_project_{room}_{index}",
+                    text,
+                    new DrawerMetadata
+                    {
+                        Wing = "project",
+                        Room = room,
+                        SourceFile = temp.GetPath("src", $"file-{index}.txt"),
+                        ChunkIndex = index,
+                        AddedBy = "test",
+                        FiledAt = "2026-04-09T10:00:00",
+                    }));
+        }
+
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers, wing: "project");
+        var search = await store.SearchAsync(CollectionNames.Drawers, "needle keyword unique phrase", 5, wing: "project");
+
+        Assert.Equal(60, drawers.Count);
+        Assert.True(search.Count <= 5);
+        Assert.NotEmpty(search);
+        Assert.Equal(Path.GetFileName(temp.GetPath("src", "file-42.txt")), Path.GetFileName(search[0].SourceFile));
+    }
 }

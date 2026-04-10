@@ -14,6 +14,29 @@
 - the package includes the CLI assemblies plus the SQLite runtime assets needed by the current storage layer
 - the tool reads and writes MemPalace-compatible data under `~/.mempalace` unless you override paths
 
+## First-Run Chroma Behavior
+
+The package does not bundle a Chroma executable.
+
+Instead, MemShack uses this default flow:
+
+1. `mems mine`, `mems search`, `mems wake-up`, and other semantic commands try
+   to use managed local Chroma.
+2. If no configured or system Chroma binary is available yet, MemShack
+   auto-downloads the official Chroma CLI into `~/.mempalace/chroma/bin/<rid>/`.
+3. MemShack starts that Chroma process automatically for the current palace.
+
+You do not need any extra Chroma configuration for the default local setup.
+
+If you want a different setup, configure one of:
+
+- `chroma_url`
+  Use an external Chroma server.
+- `chroma_binary_path`
+  Use a specific local Chroma executable.
+- `vector_store_backend: compatibility`
+  Force the legacy JSON compatibility backend instead of Chroma.
+
 ## Global Install
 
 ```powershell
@@ -55,7 +78,12 @@ mems status
 mems wake-up
 mems compress
 mems split <dir>
+mems mcp
+mems shutdowndb
 ```
+
+`mems shutdowndb` is a MemShack-specific helper that stops the managed local
+Chroma process for the selected palace.
 
 ## Path Notes
 
@@ -64,6 +92,13 @@ mems split <dir>
 - default knowledge graph path: `~/.mempalace/knowledge_graph.sqlite3`
 
 Use `--palace <path>` when you want to point the CLI at a different palace directory.
+
+If you switch palaces frequently and want to stop the managed database for one
+of them explicitly, use:
+
+```powershell
+mems --palace C:\path\to\palace shutdowndb
+```
 
 ## Contributor Packaging Commands
 

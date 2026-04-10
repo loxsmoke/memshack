@@ -163,6 +163,18 @@ fi
 
 [[ "$search_text" == *'Results for: "JWT authentication"'* ]] || abort "Installed tool search output did not include the expected result header."
 
+if ! hook_text="$("$TOOL_BIN" hook 2>&1)"; then
+    abort "mems hook failed"
+fi
+
+[[ "$hook_text" == *"Hook assets:"* && "$hook_text" == *"memshack_save_hook"* ]] || abort "Installed tool hook output did not include the expected asset guidance."
+
+if ! instructions_text="$("$TOOL_BIN" instructions 2>&1)"; then
+    abort "mems instructions failed"
+fi
+
+[[ "$instructions_text" == *"Instruction assets:"* && "$instructions_text" == *"codex.md"* ]] || abort "Installed tool instructions output did not include the expected asset guidance."
+
 pushd "$LOCAL_ROOT" > /dev/null
 trap 'popd > /dev/null' RETURN
 

@@ -46,7 +46,7 @@ public sealed class ProjectMinerIntegrationTests
         Assert.Equal("backend", drawers[0].Metadata.Room);
         Assert.Equal("test_project", drawers[0].Metadata.Wing);
         Assert.Equal("mempalace", drawers[0].Metadata.AddedBy);
-        Assert.StartsWith("drawer_test_project_backend_", drawers[0].Id);
+        Assert.Matches(@"^drawer_test_project_backend_[a-f0-9]{24}$", drawers[0].Id);
     }
 
     [TestMethod]
@@ -135,7 +135,61 @@ public sealed class ProjectMinerIntegrationTests
     }
 
     [TestMethod]
-    public async Task RoomCountsFollowPythonPathOnlySummaryBehavior()
+    public async Task ModifiedSourceFile_IsReminedWhenStoredMtimeIsStale()
+    {
+        using var temp = new TemporaryDirectory();
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "mempalace.yaml"), """
+            wing: docs_project
+            rooms:
+              - name: documentation
+                description: Docs
+              - name: general
+                description: General
+            """);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        var sourceFile = Path.Combine(projectRoot, "docs", "guide.md");
+        File.WriteAllText(sourceFile, string.Join("\n\n", Enumerable.Repeat("Guide paragraph with documentation details.", 25)));
+        var staleMtime = new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        await store.AddDrawerAsync(
+            CollectionNames.Drawers,
+            new DrawerRecord(
+                "drawer_docs_project_documentation_old",
+                "legacy text",
+                new DrawerMetadata
+                {
+                    Wing = "docs_project",
+                    Room = "documentation",
+                    SourceFile = sourceFile,
+                    SourceMtimeUtcMs = staleMtime,
+                    ChunkIndex = 0,
+                    AddedBy = "legacy",
+                    FiledAt = "2026-04-01T00:00:00",
+                    EmbeddingSignature = EmbeddingSignatures.Current,
+                }));
+
+        File.SetLastWriteTimeUtc(sourceFile, new DateTime(2026, 4, 9, 12, 0, 0, DateTimeKind.Utc));
+
+        var miner = new ProjectMiner(
+            new YamlProjectPalaceConfigLoader(),
+            new ProjectScanner(),
+            new TextChunker(),
+            store);
+
+        var result = await miner.MineAsync(projectRoot);
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.True(result.DrawersFiled > 0);
+        Assert.DoesNotContain(drawers, drawer => drawer.Id == "drawer_docs_project_documentation_old");
+        Assert.All(drawers, drawer => Assert.NotNull(drawer.Metadata.SourceMtimeUtcMs));
+        Assert.All(drawers, drawer => Assert.NotEqual(staleMtime, drawer.Metadata.SourceMtimeUtcMs));
+    }
+
+    [TestMethod]
+    public async Task RoomCountsUseActualDetectedRoom()
     {
         using var temp = new TemporaryDirectory();
         var projectRoot = temp.GetPath("project");
@@ -165,7 +219,47 @@ public sealed class ProjectMinerIntegrationTests
         var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
 
         Assert.Single(result.RoomCounts);
-        Assert.True(result.RoomCounts.ContainsKey("general"));
+        Assert.True(result.RoomCounts.ContainsKey("documentation"));
         Assert.Equal("documentation", drawers[0].Metadata.Room);
+    }
+
+    [TestMethod]
+    public async Task PathKeywordsWinBeforeContentScoring()
+    {
+        using var temp = new TemporaryDirectory();
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "mempalace.yaml"), """
+            wing: docs_project
+            rooms:
+              - name: scripts
+                description: Scripts
+                keywords:
+                  - tools
+              - name: fixtures
+                description: Fixtures
+                keywords:
+                  - fixtures
+                  - sample
+              - name: general
+                description: General
+            """);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "tools"));
+        File.WriteAllText(
+            Path.Combine(projectRoot, "tools", "live_validation.py"),
+            string.Join('\n', Enumerable.Repeat("fixture sample fixture sample fixture sample", 40)));
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var miner = new ProjectMiner(
+            new YamlProjectPalaceConfigLoader(),
+            new ProjectScanner(),
+            new TextChunker(),
+            store);
+
+        await miner.MineAsync(projectRoot);
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.NotEmpty(drawers);
+        Assert.All(drawers, drawer => Assert.Equal("scripts", drawer.Metadata.Room));
     }
 }

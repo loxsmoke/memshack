@@ -126,4 +126,21 @@ public sealed class MemoryLayersTests
         Assert.True(status.L0Identity.Exists);
         Assert.True(status.TotalDrawers > 0);
     }
+
+    [TestMethod]
+    public async Task EmptyPalacePaths_ReportMissingStateClearly()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var stack = new MemoryStack(store, temp.GetPath("palace"), temp.GetPath("missing-identity.txt"));
+
+        var wakeUp = await stack.WakeUpAsync();
+        var recall = await stack.RecallAsync();
+        var raw = await stack.L3.SearchRawAsync("anything");
+
+        Assert.Contains("No identity configured", wakeUp);
+        Assert.Contains("## L1 - No palace found. Run: mempalace mine <dir>", wakeUp);
+        Assert.Equal("No palace found.", recall);
+        Assert.Empty(raw);
+    }
 }

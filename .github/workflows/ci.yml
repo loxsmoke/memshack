@@ -24,6 +24,7 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
+          - macos-latest
 
     steps:
       - name: Check out repository
@@ -80,6 +81,7 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
+          - macos-latest
 
     steps:
       - name: Check out repository

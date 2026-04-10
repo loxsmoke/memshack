@@ -87,6 +87,7 @@ public sealed class FileConfigStore : IConfigStore
         var resolvedConfigDirectory = ResolveConfigDirectory(configDirectory);
         var configFile = Path.Combine(resolvedConfigDirectory, ConfigFileNames.ConfigJson);
         Directory.CreateDirectory(resolvedConfigDirectory);
+        EnsureSecureConfigDirectoryPermissions(resolvedConfigDirectory);
 
         if (!File.Exists(configFile))
         {
@@ -104,6 +105,8 @@ public sealed class FileConfigStore : IConfigStore
             File.WriteAllText(configFile, defaultConfig.ToJsonString(JsonOptions));
         }
 
+        EnsureSecureConfigFilePermissions(configFile);
+
         return configFile;
     }
 
@@ -111,10 +114,12 @@ public sealed class FileConfigStore : IConfigStore
     {
         var resolvedConfigDirectory = ResolveConfigDirectory(configDirectory);
         Directory.CreateDirectory(resolvedConfigDirectory);
+        EnsureSecureConfigDirectoryPermissions(resolvedConfigDirectory);
 
         var peopleMapFile = Path.Combine(resolvedConfigDirectory, ConfigFileNames.PeopleMapJson);
         var json = JsonSerializer.Serialize(peopleMap, JsonOptions);
         File.WriteAllText(peopleMapFile, json);
+        EnsureSecureConfigFilePermissions(peopleMapFile);
         return peopleMapFile;
     }
 
@@ -269,5 +274,56 @@ public sealed class FileConfigStore : IConfigStore
         }
 
         return jsonObject;
+    }
+
+    private static void EnsureSecureConfigDirectoryPermissions(string directoryPath)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(
+                directoryPath,
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite |
+                UnixFileMode.UserExecute);
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (PlatformNotSupportedException)
+        {
+        }
+    }
+
+    private static void EnsureSecureConfigFilePermissions(string filePath)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(
+                filePath,
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite);
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (PlatformNotSupportedException)
+        {
+        }
     }
 }

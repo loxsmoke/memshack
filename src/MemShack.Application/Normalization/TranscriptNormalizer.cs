@@ -7,6 +7,7 @@ namespace MemShack.Application.Normalization;
 
 public sealed class TranscriptNormalizer : ITranscriptNormalizer
 {
+    private const long MaxInputFileBytes = 500L * 1024 * 1024;
     private readonly TranscriptSpellchecker _spellchecker;
 
     public TranscriptNormalizer(TranscriptSpellchecker? spellchecker = null)
@@ -18,8 +19,19 @@ public sealed class TranscriptNormalizer : ITranscriptNormalizer
     {
         try
         {
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Exists && fileInfo.Length > MaxInputFileBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Could not read {filePath}: File is too large to normalize ({fileInfo.Length} bytes).");
+            }
+
             var content = File.ReadAllText(filePath);
             return NormalizeContent(content, Path.GetExtension(filePath));
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw new InvalidOperationException($"Could not read {filePath}: {exception.Message}", exception);
         }
         catch (IOException exception)
         {

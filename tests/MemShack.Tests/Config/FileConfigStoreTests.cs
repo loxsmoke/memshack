@@ -26,6 +26,28 @@ public sealed class FileConfigStoreTests
     }
 
     [TestMethod]
+    public void Initialize_OnUnix_SetsOwnerOnlyConfigPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temp = new TemporaryDirectory();
+        var path = _store.Initialize(temp.Root);
+
+        var directoryMode = File.GetUnixFileMode(temp.Root);
+        var fileMode = File.GetUnixFileMode(path);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            directoryMode);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            fileMode);
+    }
+
+    [TestMethod]
     public void Load_UsesPeopleMapFileOverInlineConfig()
     {
         using var temp = new TemporaryDirectory();
@@ -127,5 +149,30 @@ public sealed class FileConfigStoreTests
 
         Assert.True(snapshot.ChromaAutoInstall);
         Assert.Equal("chroma", snapshot.VectorStoreBackend);
+    }
+
+    [TestMethod]
+    public void SavePeopleMap_OnUnix_SetsOwnerOnlyFilePermissions()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temp = new TemporaryDirectory();
+        var path = _store.SavePeopleMap(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["liz"] = "Elizabeth",
+        }, temp.Root);
+
+        var directoryMode = File.GetUnixFileMode(temp.Root);
+        var fileMode = File.GetUnixFileMode(path);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            directoryMode);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            fileMode);
     }
 }

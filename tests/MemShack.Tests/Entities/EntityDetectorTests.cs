@@ -110,4 +110,33 @@ public sealed class EntityDetectorTests
         Assert.True(compatibilityIndex > readmeIndex);
         Assert.True(validationIndex > readmeIndex);
     }
+
+    [TestMethod]
+    public void ExtractCandidates_IncludesMultiWordNamesWhenRepeated()
+    {
+        var text = """
+            Ada Lovelace reviewed the design.
+            Ada Lovelace approved the plan.
+            Ada Lovelace wrote the notes.
+            """;
+
+        var candidates = _detector.ExtractCandidates(text);
+
+        Assert.Equal(3, candidates["Ada Lovelace"]);
+    }
+
+    [TestMethod]
+    public void DetectEntitiesFromText_PronounOnlySignalsRemainUncertain()
+    {
+        var text = """
+            Mems can help her later.
+            I think Mems will stay close to her notes.
+            Mems was nearby when her test run finished.
+            """;
+
+        var result = _detector.DetectEntitiesFromText(text);
+
+        Assert.DoesNotContain(result.People, entity => entity.Name == "Mems");
+        Assert.Contains(result.Uncertain, entity => entity.Name == "Mems");
+    }
 }

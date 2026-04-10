@@ -181,6 +181,24 @@ JWT authentication protects the backend API.
         throw "Installed tool search output did not include the expected result header."
     }
 
+    $hookText = [string]::Join("`n", (& $ToolExe hook 2>&1))
+    if ($LASTEXITCODE -ne 0) {
+        throw "mems hook failed"
+    }
+
+    if ($hookText -notmatch "Hook assets:" -or $hookText -notmatch "memshack_save_hook") {
+        throw "Installed tool hook output did not include the expected asset guidance."
+    }
+
+    $instructionsText = [string]::Join("`n", (& $ToolExe instructions 2>&1))
+    if ($LASTEXITCODE -ne 0) {
+        throw "mems instructions failed"
+    }
+
+    if ($instructionsText -notmatch "Instruction assets:" -or $instructionsText -notmatch "codex.md") {
+        throw "Installed tool instructions output did not include the expected asset guidance."
+    }
+
     Push-Location $LocalRoot
     try {
         Invoke-Checked -Label "Create local tool manifest" -Action {

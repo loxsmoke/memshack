@@ -25,6 +25,10 @@ dotnet new tool-manifest
 dotnet tool install --local LoxSmoke.Mems
 ```
 
+On the first real semantic command such as `mems mine` or `mems search`,
+MemShack auto-downloads the official Chroma CLI into `~/.mempalace/chroma/`
+when needed and starts it automatically for the selected palace.
+
 ## Core Commands
 
 ```powershell
@@ -35,7 +39,18 @@ mems status
 mems wake-up
 mems compress
 mems split <dir>
+mems mcp
+mems shutdowndb
 ```
+
+## MCP And Runtime Notes
+
+- `mems mcp` prints the current repo-checkout MCP server command.
+- `mems shutdowndb` stops the managed local Chroma process for a palace.
+- For detailed setup guidance, see the repo docs:
+  - `docs/tool-installation.md`
+  - `docs/mcp-setup.md`
+  - `docs/migration-guide.md`
 
 ## Storage Compatibility
 

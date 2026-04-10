@@ -88,6 +88,44 @@ public sealed class ProjectScannerTests
         Assert.Equal("nested/child.md", files[1]);
     }
 
+    [TestMethod]
+    public void ScanProject_SkipsOversizedReadableFiles()
+    {
+        using var temp = new TemporaryDirectory();
+        temp.WriteFile("small.md", "# Small\n" + new string('s', 80));
+        var largePath = temp.GetPath("large.md");
+        using (var stream = File.Open(largePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            stream.SetLength(11L * 1024 * 1024);
+        }
+
+        var files = ScanRelative(temp.Root, respectGitignore: false);
+
+        Assert.Equal(["small.md"], files);
+    }
+
+    [TestMethod]
+    public void ScanProject_SkipsSymbolicLinkFiles()
+    {
+        using var temp = new TemporaryDirectory();
+        var targetPath = temp.WriteFile("real.md", "# Real\n" + new string('r', 80));
+        var linkPath = temp.GetPath("linked.md");
+
+        try
+        {
+            File.CreateSymbolicLink(linkPath, targetPath);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            Microsoft.VisualStudio.TestTools.UnitTesting.Assert.Inconclusive($"Symbolic links are not available in this environment: {exception.Message}");
+            return;
+        }
+
+        var files = ScanRelative(temp.Root, respectGitignore: false);
+
+        Assert.Equal(["real.md"], files);
+    }
+
     private IReadOnlyList<string> ScanRelative(
         string projectRoot,
         bool respectGitignore = true,

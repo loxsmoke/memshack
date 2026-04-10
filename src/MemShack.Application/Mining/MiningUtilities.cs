@@ -8,7 +8,7 @@ internal static class MiningUtilities
 {
     public static string CreateDrawerId(string wing, string room, string sourceFile, int chunkIndex)
     {
-        var hash = ComputeMd5Hex($"{sourceFile}{chunkIndex}")[..16];
+        var hash = ComputeSha256Hex($"{sourceFile}{chunkIndex}")[..24];
         return $"drawer_{wing}_{room}_{hash}";
     }
 
@@ -21,9 +21,9 @@ internal static class MiningUtilities
     public static string NowIso() =>
         DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffff", CultureInfo.InvariantCulture);
 
-    private static string ComputeMd5Hex(string value)
+    private static string ComputeSha256Hex(string value)
     {
-        var bytes = MD5.HashData(Encoding.UTF8.GetBytes(value));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

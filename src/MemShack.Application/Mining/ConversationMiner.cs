@@ -195,7 +195,7 @@ public sealed class ConversationMiner
     {
         var sourceFile = Path.GetFullPath(filePath);
         if (!dryRun &&
-            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, cancellationToken))
+            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs: null, cancellationToken))
         {
             return new ConversationProcessingResult(0, new Dictionary<string, int>(StringComparer.Ordinal));
         }

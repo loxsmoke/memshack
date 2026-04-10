@@ -21,12 +21,16 @@ public sealed partial class MemShackMcpServer
         var rooms = drawers
             .GroupBy(drawer => drawer.Metadata.Room, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var limitedWings = LimitCounts(wings, MaxGroupedCountBuckets, out var wingsTruncated);
+        var limitedRooms = LimitCounts(rooms, MaxGroupedCountBuckets, out var roomsTruncated);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["total_drawers"] = drawers.Count,
-            ["wings"] = wings,
-            ["rooms"] = rooms,
+            ["wings"] = limitedWings,
+            ["rooms"] = limitedRooms,
+            ["wings_truncated"] = wingsTruncated,
+            ["rooms_truncated"] = roomsTruncated,
             ["palace_path"] = _config.PalacePath,
             ["protocol"] = PalaceProtocol,
             ["aaak_dialect"] = AaakSpec,
@@ -44,10 +48,12 @@ public sealed partial class MemShackMcpServer
         var wings = drawers
             .GroupBy(drawer => drawer.Metadata.Wing, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var limitedWings = LimitCounts(wings, MaxGroupedCountBuckets, out var truncated);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["wings"] = wings,
+            ["wings"] = limitedWings,
+            ["truncated"] = truncated,
         };
     }
 
@@ -58,16 +64,18 @@ public sealed partial class MemShackMcpServer
             return NoPalace();
         }
 
-        var wing = GetOptionalString(arguments, "wing");
+        var wing = SanitizeOptionalNullableSlug(arguments, "wing");
         var drawers = await _vectorStore.GetDrawersAsync(_config.CollectionName, wing, cancellationToken: cancellationToken);
         var rooms = drawers
             .GroupBy(drawer => drawer.Metadata.Room, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var limitedRooms = LimitCounts(rooms, MaxGroupedCountBuckets, out var truncated);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["wing"] = wing ?? "all",
-            ["rooms"] = rooms,
+            ["rooms"] = limitedRooms,
+            ["truncated"] = truncated,
         };
     }
 
@@ -94,9 +102,13 @@ public sealed partial class MemShackMcpServer
                 : 1;
         }
 
+        var limitedTaxonomy = LimitTaxonomy(taxonomy, out var wingsTruncated, out var omittedRoomGroups);
+
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["taxonomy"] = taxonomy,
+            ["taxonomy"] = limitedTaxonomy,
+            ["wings_truncated"] = wingsTruncated,
+            ["omitted_room_groups"] = omittedRoomGroups,
         };
     }
 
@@ -114,10 +126,15 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolSearchAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var query = GetRequiredString(arguments, "query");
-        var limit = GetInt(arguments, "limit", 5);
-        var wing = GetOptionalString(arguments, "wing");
-        var room = GetOptionalString(arguments, "room");
+        var query = SanitizeContent(arguments, "query");
+        var limit = ClampPositiveInt(GetInt(arguments, "limit", 5), 5, 25);
+        var wing = SanitizeOptionalNullableSlug(arguments, "wing");
+        var room = SanitizeOptionalNullableSlug(arguments, "room");
+
+        if (!await HasCollectionAsync(cancellationToken))
+        {
+            return NoPalace();
+        }
 
         var service = new MemorySearchService(_vectorStore, _config.PalacePath, _config.CollectionName);
         var result = await service.SearchMemoriesAsync(query, wing, room, limit, cancellationToken);
@@ -126,6 +143,12 @@ public sealed partial class MemShackMcpServer
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["error"] = result.Error,
+                ["query"] = query,
+                ["filters"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["wing"] = wing,
+                    ["room"] = room,
+                },
             };
         }
 
@@ -150,8 +173,8 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolCheckDuplicateAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var content = GetRequiredString(arguments, "content");
-        var threshold = GetDouble(arguments, "threshold", 0.9);
+        var content = SanitizeContent(arguments, "content");
+        var threshold = ClampThreshold(GetDouble(arguments, "threshold", 0.9));
 
         if (!await HasCollectionAsync(cancellationToken))
         {
@@ -168,27 +191,79 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolAddDrawerAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var wing = GetRequiredString(arguments, "wing");
-        var room = GetRequiredString(arguments, "room");
-        var content = GetRequiredString(arguments, "content");
-        var sourceFile = GetOptionalString(arguments, "source_file") ?? string.Empty;
-        var addedBy = GetOptionalString(arguments, "added_by") ?? "mcp";
+        var wing = SanitizeRequiredSlug(arguments, "wing");
+        var room = SanitizeRequiredSlug(arguments, "room");
+        var content = SanitizeContent(arguments, "content");
+        var sourceFile = SanitizeOptionalSourceFile(arguments) ?? string.Empty;
+        var addedBy = SanitizeAddedBy(arguments);
+        var drawerId = CreateDeterministicDrawerId(wing, room, content, sourceFile);
 
         await _vectorStore.EnsureCollectionAsync(_config.CollectionName, cancellationToken);
+        await AppendWriteAheadLogAsync(
+            "add_drawer",
+            "intent",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["drawer_id"] = drawerId,
+                ["wing"] = wing,
+                ["room"] = room,
+                ["source_file"] = sourceFile,
+                ["added_by"] = addedBy,
+                ["content_sha256"] = Sha256Hex(content),
+            },
+            cancellationToken);
+
+        var existingDrawer = await FindDrawerByIdAsync(drawerId, cancellationToken);
+        if (existingDrawer is not null)
+        {
+            await AppendWriteAheadLogAsync(
+                "add_drawer",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["drawer_id"] = drawerId,
+                    ["wing"] = wing,
+                    ["room"] = room,
+                    ["reason"] = "already_exists",
+                },
+                cancellationToken);
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_exists",
+                ["drawer_id"] = drawerId,
+                ["wing"] = wing,
+                ["room"] = room,
+            };
+        }
 
         var duplicateMatches = await FindDuplicateMatchesAsync(content, 0.9, cancellationToken);
         if (duplicateMatches.Count > 0)
         {
+            await AppendWriteAheadLogAsync(
+                "add_drawer",
+                "duplicate",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["drawer_id"] = drawerId,
+                    ["wing"] = wing,
+                    ["room"] = room,
+                    ["match_count"] = duplicateMatches.Count,
+                },
+                cancellationToken);
+
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["success"] = false,
                 ["reason"] = "duplicate",
+                ["drawer_id"] = drawerId,
                 ["matches"] = duplicateMatches,
             };
         }
 
         var now = DateTime.Now;
-        var drawerId = $"drawer_{wing}_{room}_{Md5Hex(content[..Math.Min(100, content.Length)] + now.ToString("O", CultureInfo.InvariantCulture))[..16]}";
         var drawer = new DrawerRecord(
             drawerId,
             content,
@@ -205,16 +280,44 @@ public sealed partial class MemShackMcpServer
         var added = await _vectorStore.AddDrawerAsync(_config.CollectionName, drawer, cancellationToken);
         if (!added)
         {
+            await AppendWriteAheadLogAsync(
+                "add_drawer",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["drawer_id"] = drawerId,
+                    ["wing"] = wing,
+                    ["room"] = room,
+                    ["reason"] = "already_exists",
+                },
+                cancellationToken);
+
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["success"] = false,
-                ["error"] = $"Drawer already exists: {drawerId}",
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_exists",
+                ["drawer_id"] = drawerId,
+                ["wing"] = wing,
+                ["room"] = room,
             };
         }
+
+        await AppendWriteAheadLogAsync(
+            "add_drawer",
+            "success",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["drawer_id"] = drawerId,
+                ["wing"] = wing,
+                ["room"] = room,
+            },
+            cancellationToken);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["success"] = true,
+            ["noop"] = false,
             ["drawer_id"] = drawerId,
             ["wing"] = wing,
             ["room"] = room,
@@ -223,16 +326,35 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolDeleteDrawerAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var drawerId = GetRequiredString(arguments, "drawer_id");
+        var drawerId = SanitizeBoundedText(GetRequiredString(arguments, "drawer_id"), "drawer_id", maxLength: 200, preserveNewlines: false);
 
         if (!await HasCollectionAsync(cancellationToken))
         {
             return NoPalace();
         }
 
+        await AppendWriteAheadLogAsync(
+            "delete_drawer",
+            "intent",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["drawer_id"] = drawerId,
+            },
+            cancellationToken);
+
         var drawers = await _vectorStore.GetDrawersAsync(_config.CollectionName, cancellationToken: cancellationToken);
         if (!drawers.Any(drawer => string.Equals(drawer.Id, drawerId, StringComparison.Ordinal)))
         {
+            await AppendWriteAheadLogAsync(
+                "delete_drawer",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["drawer_id"] = drawerId,
+                    ["reason"] = "not_found",
+                },
+                cancellationToken);
+
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["success"] = false,
@@ -241,6 +363,16 @@ public sealed partial class MemShackMcpServer
         }
 
         var deleted = await _vectorStore.DeleteDrawerAsync(_config.CollectionName, drawerId, cancellationToken);
+        await AppendWriteAheadLogAsync(
+            "delete_drawer",
+            deleted ? "success" : "noop",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["drawer_id"] = drawerId,
+                ["reason"] = deleted ? null : "not_found",
+            },
+            cancellationToken);
+
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["success"] = deleted,
@@ -250,15 +382,55 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolDiaryWriteAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var agentName = GetRequiredString(arguments, "agent_name");
-        var entry = GetRequiredString(arguments, "entry");
-        var topic = GetOptionalString(arguments, "topic") ?? "general";
+        var agentName = SanitizeAgentName(arguments);
+        var entry = SanitizeContent(arguments, "entry");
+        var topic = SanitizeOptionalSlug(arguments, "topic", "general");
 
         await _vectorStore.EnsureCollectionAsync(_config.CollectionName, cancellationToken);
 
         var now = DateTime.Now;
         var wing = $"wing_{NormalizeAgentName(agentName)}";
-        var entryId = $"diary_{wing}_{now:yyyyMMdd_HHmmss}_{Md5Hex(entry[..Math.Min(50, entry.Length)])[..8]}";
+        var entryId = CreateDeterministicDiaryEntryId(wing, topic, entry);
+        await AppendWriteAheadLogAsync(
+            "diary_write",
+            "intent",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["entry_id"] = entryId,
+                ["agent"] = agentName,
+                ["wing"] = wing,
+                ["topic"] = topic,
+                ["content_sha256"] = Sha256Hex(entry),
+            },
+            cancellationToken);
+
+        var existingEntry = await FindDrawerByIdAsync(entryId, cancellationToken);
+        if (existingEntry is not null)
+        {
+            await AppendWriteAheadLogAsync(
+                "diary_write",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["entry_id"] = entryId,
+                    ["agent"] = agentName,
+                    ["wing"] = wing,
+                    ["topic"] = topic,
+                    ["reason"] = "already_exists",
+                },
+                cancellationToken);
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_exists",
+                ["entry_id"] = entryId,
+                ["agent"] = agentName,
+                ["topic"] = topic,
+                ["timestamp"] = existingEntry.Metadata.FiledAt,
+            };
+        }
 
         var drawer = new DrawerRecord(
             entryId,
@@ -281,12 +453,47 @@ public sealed partial class MemShackMcpServer
         var added = await _vectorStore.AddDrawerAsync(_config.CollectionName, drawer, cancellationToken);
         if (!added)
         {
-            throw new InvalidOperationException($"Diary entry already exists: {entryId}");
+            await AppendWriteAheadLogAsync(
+                "diary_write",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["entry_id"] = entryId,
+                    ["agent"] = agentName,
+                    ["wing"] = wing,
+                    ["topic"] = topic,
+                    ["reason"] = "already_exists",
+                },
+                cancellationToken);
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_exists",
+                ["entry_id"] = entryId,
+                ["agent"] = agentName,
+                ["topic"] = topic,
+                ["timestamp"] = now.ToString("O", CultureInfo.InvariantCulture),
+            };
         }
+
+        await AppendWriteAheadLogAsync(
+            "diary_write",
+            "success",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["entry_id"] = entryId,
+                ["agent"] = agentName,
+                ["wing"] = wing,
+                ["topic"] = topic,
+            },
+            cancellationToken);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["success"] = true,
+            ["noop"] = false,
             ["entry_id"] = entryId,
             ["agent"] = agentName,
             ["topic"] = topic,
@@ -296,8 +503,8 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolDiaryReadAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var agentName = GetRequiredString(arguments, "agent_name");
-        var lastN = GetInt(arguments, "last_n", 10);
+        var agentName = SanitizeAgentName(arguments);
+        var lastN = ClampPositiveInt(GetInt(arguments, "last_n", 10), 10, MaxDiaryReadEntries);
 
         if (!await HasCollectionAsync(cancellationToken))
         {

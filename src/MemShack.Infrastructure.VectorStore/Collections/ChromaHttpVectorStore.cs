@@ -251,6 +251,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         string collectionName,
         string sourceFile,
         string? embeddingSignature = null,
+        long? sourceMtimeUtcMs = null,
         CancellationToken cancellationToken = default)
     {
         var collectionId = await ResolveCollectionIdAsync(collectionName, createIfMissing: false, cancellationToken);
@@ -267,7 +268,19 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         };
 
         using var document = await SendAsync(HttpMethod.Post, BuildCollectionActionPath(collectionId, "get"), body, cancellationToken);
-        return GetIdCount(document.RootElement) > 0;
+        if (GetIdCount(document.RootElement) == 0)
+        {
+            return false;
+        }
+
+        if (!sourceMtimeUtcMs.HasValue)
+        {
+            return true;
+        }
+
+        var metadata = GetFirstMetadata(document.RootElement);
+        return metadata.SourceMtimeUtcMs.HasValue &&
+               metadata.SourceMtimeUtcMs.Value == sourceMtimeUtcMs.Value;
     }
 
     public async Task<bool> DeleteSourceFileAsync(
@@ -659,6 +672,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             Wing = GetMetadataString(element, "wing") ?? string.Empty,
             Room = GetMetadataString(element, "room") ?? string.Empty,
             SourceFile = GetMetadataString(element, "source_file") ?? string.Empty,
+            SourceMtimeUtcMs = GetNullableMetadataLong(element, MetadataKeys.SourceMtime),
             ChunkIndex = GetMetadataInt(element, "chunk_index"),
             AddedBy = GetMetadataString(element, "added_by") ?? string.Empty,
             FiledAt = GetMetadataString(element, "filed_at") ?? string.Empty,
@@ -735,6 +749,14 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             ? value.GetDouble()
             : null;
 
+    private static long? GetNullableMetadataLong(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
+        element.TryGetProperty(propertyName, out var value) &&
+        value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt64(out var parsed)
+            ? parsed
+            : null;
+
     private static JsonObject ToMetadataJson(DrawerMetadata metadata)
     {
         var json = new JsonObject
@@ -747,6 +769,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             ["filed_at"] = metadata.FiledAt,
         };
 
+        AddOptional(json, MetadataKeys.SourceMtime, metadata.SourceMtimeUtcMs);
         AddOptional(json, MetadataKeys.EmbeddingSignature, metadata.EmbeddingSignature);
         AddOptional(json, "ingest_mode", metadata.IngestMode);
         AddOptional(json, "extract_mode", metadata.ExtractMode);
@@ -844,6 +867,14 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         }
     }
 
+    private static void AddOptional(JsonObject json, string propertyName, long? value)
+    {
+        if (value.HasValue)
+        {
+            json[propertyName] = value.Value;
+        }
+    }
+
     private static void AddOptional(JsonObject json, string propertyName, double? value)
     {
         if (value.HasValue)
@@ -857,5 +888,21 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         Unknown,
         V1,
         V2,
+    }
+
+    private static DrawerMetadata GetFirstMetadata(JsonElement root)
+    {
+        if (root.TryGetProperty("metadatas", out var metadatasElement) &&
+            metadatasElement.ValueKind == JsonValueKind.Array &&
+            metadatasElement.GetArrayLength() > 0)
+        {
+            var first = metadatasElement[0];
+            if (first.ValueKind == JsonValueKind.Object)
+            {
+                return ParseDrawerMetadata(first);
+            }
+        }
+
+        return new DrawerMetadata();
     }
 }

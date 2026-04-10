@@ -140,7 +140,7 @@ public sealed class Palace2ShackParityTests
         Assert.Equal(4, drawers1.Count);
         Assert.Equal(4, drawers2.Count);
         Assert.Equal(Snapshot(drawers1, corpusPath), Snapshot(drawers2, corpusPath));
-        Assert.All(drawers1, drawer => Assert.Matches(@"^drawer_product_[a-z]+_[a-f0-9]{16}$", drawer.Id));
+        Assert.All(drawers1, drawer => Assert.Matches(@"^drawer_product_[a-z]+_[a-f0-9]{24}$", drawer.Id));
 
         var bySource = drawers1.ToDictionary(
             drawer => Path.GetRelativePath(corpusPath, drawer.Metadata.SourceFile).Replace('\\', '/'),

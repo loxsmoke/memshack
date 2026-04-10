@@ -5,6 +5,7 @@ public static class ConfigFileNames
     public const string ChromaInstallLock = ".memshack_chroma_install.lock";
     public const string ChromaSidecarLock = ".memshack_chroma_sidecar.lock";
     public const string ChromaSidecarStateJson = ".memshack_chroma_sidecar.json";
+    public const string McpWriteAheadLogJsonl = "mcp_write_ahead.jsonl";
     public const string ConfigJson = "config.json";
     public const string PeopleMapJson = "people_map.json";
     public const string IdentityText = "identity.txt";

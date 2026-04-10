@@ -31,6 +31,27 @@ public sealed class MemShackMcpServerTests
     }
 
     [TestMethod]
+    public async Task Initialize_NegotiatesSupportedProtocolVersion()
+    {
+        using var temp = new TemporaryDirectory();
+        var server = await CreateServerAsync(temp);
+
+        var response = await server.HandleRequestAsync(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = "2025-06-18",
+            },
+        });
+
+        Assert.NotNull(response);
+        Assert.Equal("2025-06-18", response!["result"]!["protocolVersion"]!.GetValue<string>());
+    }
+
+    [TestMethod]
     public async Task NotificationsInitialized_ReturnsNull_AndToolsListContainsAllTools()
     {
         using var temp = new TemporaryDirectory();
@@ -131,6 +152,29 @@ public sealed class MemShackMcpServerTests
     }
 
     [TestMethod]
+    public async Task ToolCall_AllowsNullArgumentsWithoutCrashing()
+    {
+        using var temp = new TemporaryDirectory();
+        var server = await CreateServerAsync(temp);
+
+        var response = await server.HandleRequestAsync(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 9,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = McpToolNames.Status,
+                ["arguments"] = null,
+            },
+        });
+
+        Assert.NotNull(response);
+        Assert.NotNull(response!["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [TestMethod]
     public async Task ReadTools_ReturnStatusTaxonomyAndSearchResults()
     {
         using var temp = new TemporaryDirectory();
@@ -160,9 +204,9 @@ public sealed class MemShackMcpServerTests
 
         var added = ToObject(await server.InvokeToolAsync(McpToolNames.AddDrawer, new JsonObject
         {
-            ["wing"] = "test_wing",
-            ["room"] = "test_room",
-            ["content"] = "This is a test memory about Python decorators and metaclasses.",
+            ["wing"] = " Test Wing ",
+            ["room"] = "Test Room",
+            ["content"] = "This is a test memory about Python decorators and metaclasses.\r\n",
         }));
         var duplicateCheckResponse = await server.HandleRequestAsync(new JsonObject
         {
@@ -181,8 +225,8 @@ public sealed class MemShackMcpServerTests
         });
         var duplicateAdded = ToObject(await server.InvokeToolAsync(McpToolNames.AddDrawer, new JsonObject
         {
-            ["wing"] = "test_wing",
-            ["room"] = "test_room",
+            ["wing"] = "test wing",
+            ["room"] = "test room",
             ["content"] = "This is a test memory about Python decorators and metaclasses.",
         }));
         var deleted = ToObject(await server.InvokeToolAsync(McpToolNames.DeleteDrawer, new JsonObject
@@ -191,11 +235,20 @@ public sealed class MemShackMcpServerTests
         }));
 
         Assert.True(added["success"]!.GetValue<bool>());
+        Assert.False(added["noop"]!.GetValue<bool>());
+        Assert.Equal("test_wing", added["wing"]!.GetValue<string>());
+        Assert.Equal("test_room", added["room"]!.GetValue<string>());
         Assert.StartsWith("drawer_test_wing_test_room_", added["drawer_id"]!.GetValue<string>());
         Assert.True(ParseToolText(duplicateCheckResponse!)["is_duplicate"]!.GetValue<bool>());
-        Assert.False(duplicateAdded["success"]!.GetValue<bool>());
-        Assert.Equal("duplicate", duplicateAdded["reason"]!.GetValue<string>());
+        Assert.True(duplicateAdded["success"]!.GetValue<bool>());
+        Assert.True(duplicateAdded["noop"]!.GetValue<bool>());
+        Assert.Equal("already_exists", duplicateAdded["reason"]!.GetValue<string>());
+        Assert.Equal(added["drawer_id"]!.GetValue<string>(), duplicateAdded["drawer_id"]!.GetValue<string>());
         Assert.True(deleted["success"]!.GetValue<bool>());
+
+        var logLines = File.ReadAllLines(Path.Combine(temp.GetPath("palace"), ConfigFileNames.McpWriteAheadLogJsonl));
+        Assert.Contains(logLines, line => line.Contains("\"operation\":\"add_drawer\"", StringComparison.Ordinal));
+        Assert.Contains(logLines, line => line.Contains("\"operation\":\"delete_drawer\"", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -211,8 +264,22 @@ public sealed class MemShackMcpServerTests
             ["object"] = "coffee",
             ["valid_from"] = "2025-01-01",
         }));
+        var duplicateAdded = ToObject(await server.InvokeToolAsync(McpToolNames.KgAdd, new JsonObject
+        {
+            ["subject"] = "Alice",
+            ["predicate"] = "likes",
+            ["object"] = "coffee",
+            ["valid_from"] = "2025-01-01",
+        }));
         var query = ToObject(await server.InvokeToolAsync(McpToolNames.KgQuery, new JsonObject { ["entity"] = "Max" }));
         var invalidated = ToObject(await server.InvokeToolAsync(McpToolNames.KgInvalidate, new JsonObject
+        {
+            ["subject"] = "Max",
+            ["predicate"] = "does",
+            ["object"] = "chess",
+            ["ended"] = "2026-03-01",
+        }));
+        var invalidatedAgain = ToObject(await server.InvokeToolAsync(McpToolNames.KgInvalidate, new JsonObject
         {
             ["subject"] = "Max",
             ["predicate"] = "does",
@@ -223,10 +290,22 @@ public sealed class MemShackMcpServerTests
         var stats = ToObject(await server.InvokeToolAsync(McpToolNames.KgStats));
 
         Assert.True(added["success"]!.GetValue<bool>());
+        Assert.False(added["noop"]!.GetValue<bool>());
+        Assert.True(duplicateAdded["success"]!.GetValue<bool>());
+        Assert.True(duplicateAdded["noop"]!.GetValue<bool>());
+        Assert.Equal("already_exists", duplicateAdded["reason"]!.GetValue<string>());
         Assert.True(query["count"]!.GetValue<int>() > 0);
         Assert.True(invalidated["success"]!.GetValue<bool>());
+        Assert.False(invalidated["noop"]!.GetValue<bool>());
+        Assert.True(invalidatedAgain["success"]!.GetValue<bool>());
+        Assert.True(invalidatedAgain["noop"]!.GetValue<bool>());
+        Assert.Equal("already_invalidated", invalidatedAgain["reason"]!.GetValue<string>());
         Assert.True(timeline["count"]!.GetValue<int>() > 0);
         Assert.True(stats["entities"]!.GetValue<int>() >= 4);
+
+        var logLines = File.ReadAllLines(Path.Combine(temp.GetPath("palace"), ConfigFileNames.McpWriteAheadLogJsonl));
+        Assert.Contains(logLines, line => line.Contains("\"operation\":\"kg_add\"", StringComparison.Ordinal));
+        Assert.Contains(logLines, line => line.Contains("\"operation\":\"kg_invalidate\"", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -271,6 +350,12 @@ public sealed class MemShackMcpServerTests
             ["entry"] = "Today we discussed authentication patterns.",
             ["topic"] = "architecture",
         }));
+        var duplicateWritten = ToObject(await server.InvokeToolAsync(McpToolNames.DiaryWrite, new JsonObject
+        {
+            ["agent_name"] = "TestAgent",
+            ["entry"] = "Today we discussed authentication patterns.",
+            ["topic"] = "architecture",
+        }));
         await server.InvokeToolAsync(McpToolNames.DiaryWrite, new JsonObject
         {
             ["agent_name"] = "TestAgent",
@@ -302,10 +387,83 @@ public sealed class MemShackMcpServerTests
         }));
 
         Assert.True(written["success"]!.GetValue<bool>());
+        Assert.False(written["noop"]!.GetValue<bool>());
+        Assert.True(duplicateWritten["success"]!.GetValue<bool>());
+        Assert.True(duplicateWritten["noop"]!.GetValue<bool>());
+        Assert.Equal(written["entry_id"]!.GetValue<string>(), duplicateWritten["entry_id"]!.GetValue<string>());
         Assert.Equal(2, read["total"]!.GetValue<int>());
         Assert.Contains("architecture", ((JsonArray)read["entries"]!).Select(entry => entry!["topic"]!.GetValue<string>()));
         Assert.Equal(1, ParseToolText(coercedReadResponse!)["showing"]!.GetValue<int>());
         Assert.Empty((JsonArray)empty["entries"]!);
+
+        var logLines = File.ReadAllLines(Path.Combine(temp.GetPath("palace"), ConfigFileNames.McpWriteAheadLogJsonl));
+        Assert.Contains(logLines, line => line.Contains("\"operation\":\"diary_write\"", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task SearchTool_WithoutPalace_ReturnsNoPalacePayload()
+    {
+        using var temp = new TemporaryDirectory();
+        var server = await CreateServerAsync(temp);
+
+        var search = ToObject(await server.InvokeToolAsync(McpToolNames.Search, new JsonObject
+        {
+            ["query"] = "JWT authentication",
+        }));
+
+        Assert.Equal("No palace found", search["error"]!.GetValue<string>());
+        Assert.Equal(temp.GetPath("palace"), search["palace_path"]!.GetValue<string>());
+        Assert.NotNull(search["hint"]);
+    }
+
+    [TestMethod]
+    public async Task ToolCall_ReturnsGenericInternalErrorEnvelopeOnFailure()
+    {
+        using var temp = new TemporaryDirectory();
+        var server = await CreateServerAsync(temp);
+
+        var response = await server.HandleRequestAsync(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 10,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = McpToolNames.Search,
+                ["arguments"] = new JsonObject(),
+            },
+        });
+
+        Assert.NotNull(response);
+        Assert.Equal(-32000, response!["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Internal tool error", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public async Task ToolCall_ReturnsGenericInternalErrorEnvelopeForInvalidWriteArguments()
+    {
+        using var temp = new TemporaryDirectory();
+        var server = await CreateServerAsync(temp);
+
+        var response = await server.HandleRequestAsync(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 11,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = McpToolNames.AddDrawer,
+                ["arguments"] = new JsonObject
+                {
+                    ["wing"] = "project",
+                    ["room"] = "backend",
+                },
+            },
+        });
+
+        Assert.NotNull(response);
+        Assert.Equal(-32000, response!["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Internal tool error", response["error"]!["message"]!.GetValue<string>());
     }
 
     private static async Task<MemShackMcpServer> CreateServerAsync(

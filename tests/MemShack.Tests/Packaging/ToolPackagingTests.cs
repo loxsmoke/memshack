@@ -43,6 +43,30 @@ public sealed class ToolPackagingTests
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "src", "MemShack.Cli", "README.md")),
             "The packaged CLI README.md file should exist under src/MemShack.Cli.");
         Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "hooks", "README.md")),
+            "The repo-local hook guide should exist at hooks/README.md.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "hooks", "memshack_save_hook.sh")),
+            "The save hook script should exist at hooks/memshack_save_hook.sh.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "hooks", "memshack_precompact_hook.sh")),
+            "The pre-compact hook script should exist at hooks/memshack_precompact_hook.sh.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "instructions", "README.md")),
+            "The instruction asset guide should exist at instructions/README.md.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "instructions", "codex.md")),
+            "The Codex instruction asset should exist at instructions/codex.md.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "instructions", "claude-code.md")),
+            "The Claude Code instruction asset should exist at instructions/claude-code.md.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, ".agents", "plugins", "marketplace.json")),
+            "The repo-local plugin marketplace file should exist at .agents/plugins/marketplace.json.");
+        Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "plugins", "memshack", ".codex-plugin", "plugin.json")),
+            "The repo-local MemShack plugin manifest should exist at plugins/memshack/.codex-plugin/plugin.json.");
+        Assert.True(
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "docs", "tool-installation.md")),
             "The contributor packaging guide should exist at docs/tool-installation.md.");
         Assert.True(
@@ -64,6 +88,24 @@ public sealed class ToolPackagingTests
             .FirstOrDefault(element => string.Equals((string?)element.Attribute("Include"), @"chroma\**\*", StringComparison.Ordinal));
 
         Assert.Null(chromaItem, "MemShack.Cli.csproj should no longer package placeholder bundled Chroma sidecar assets.");
+    }
+
+    [TestMethod]
+    public void CliProject_CopiesHookAndInstructionAssetsIntoToolOutput()
+    {
+        var projectPath = Path.Combine(FixturePaths.RepoRootPath, "src", "MemShack.Cli", "MemShack.Cli.csproj");
+        var document = XDocument.Load(projectPath);
+        var contentItems = document.Root?
+            .Elements("ItemGroup")
+            .Elements("Content")
+            .ToArray() ?? [];
+
+        Assert.Contains(
+            contentItems,
+            element => string.Equals((string?)element.Attribute("Include"), @"..\..\hooks\**\*", StringComparison.Ordinal));
+        Assert.Contains(
+            contentItems,
+            element => string.Equals((string?)element.Attribute("Include"), @"..\..\instructions\**\*", StringComparison.Ordinal));
     }
 
     private static string? GetProperty(XDocument document, string propertyName) =>

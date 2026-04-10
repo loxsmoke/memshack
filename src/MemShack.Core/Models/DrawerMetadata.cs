@@ -8,6 +8,8 @@ public sealed record DrawerMetadata
 
     public string SourceFile { get; init; } = string.Empty;
 
+    public long? SourceMtimeUtcMs { get; init; }
+
     public int ChunkIndex { get; init; }
 
     public string AddedBy { get; init; } = string.Empty;

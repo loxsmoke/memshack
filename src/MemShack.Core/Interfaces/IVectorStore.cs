@@ -36,6 +36,7 @@ public interface IVectorStore
         string collectionName,
         string sourceFile,
         string? embeddingSignature = null,
+        long? sourceMtimeUtcMs = null,
         CancellationToken cancellationToken = default);
 
     Task<bool> DeleteSourceFileAsync(

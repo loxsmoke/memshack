@@ -7,9 +7,14 @@ public sealed partial class MemShackMcpServer
 {
     private async Task<object?> ToolKnowledgeGraphQueryAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var entity = GetRequiredString(arguments, "entity");
-        var asOf = GetOptionalString(arguments, "as_of");
-        var direction = GetOptionalString(arguments, "direction") ?? "both";
+        var entity = SanitizeEntityName(arguments, "entity");
+        var asOf = SanitizeOptionalIsoDate(arguments, "as_of");
+        var direction = (GetOptionalString(arguments, "direction") ?? "both").Trim().ToLowerInvariant();
+        if (direction is not ("outgoing" or "incoming" or "both"))
+        {
+            throw new InvalidOperationException("Invalid direction: expected outgoing, incoming, or both.");
+        }
+
         var facts = await _knowledgeGraphStore.QueryEntityAsync(entity, asOf, direction, cancellationToken);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -23,19 +28,71 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolKnowledgeGraphAddAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var subject = GetRequiredString(arguments, "subject");
-        var predicate = GetRequiredString(arguments, "predicate");
-        var @object = GetRequiredString(arguments, "object");
-        var validFrom = GetOptionalString(arguments, "valid_from");
-        var sourceCloset = GetOptionalString(arguments, "source_closet");
+        var subject = SanitizeEntityName(arguments, "subject");
+        var predicate = SanitizeBoundedText(GetRequiredString(arguments, "predicate"), "predicate", maxLength: 80, preserveNewlines: false);
+        var @object = SanitizeEntityName(arguments, "object");
+        var validFrom = SanitizeOptionalIsoDate(arguments, "valid_from");
+        var sourceCloset = SanitizeOptionalEntityName(arguments, "source_closet");
+
+        await AppendWriteAheadLogAsync(
+            "kg_add",
+            "intent",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["subject"] = subject,
+                ["predicate"] = predicate,
+                ["object"] = @object,
+                ["valid_from"] = validFrom,
+                ["source_closet"] = sourceCloset,
+            },
+            cancellationToken);
+
+        var existingTriple = await FindCurrentTripleAsync(subject, predicate, @object, cancellationToken);
+        if (existingTriple is not null)
+        {
+            await AppendWriteAheadLogAsync(
+                "kg_add",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["triple_id"] = existingTriple.Id,
+                    ["subject"] = subject,
+                    ["predicate"] = predicate,
+                    ["object"] = @object,
+                    ["reason"] = "already_exists",
+                },
+                cancellationToken);
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_exists",
+                ["triple_id"] = existingTriple.Id,
+                ["fact"] = $"{subject} -> {predicate} -> {@object}",
+            };
+        }
 
         var tripleId = await _knowledgeGraphStore.AddTripleAsync(
             new TripleRecord(subject, predicate, @object, ValidFrom: validFrom, SourceCloset: sourceCloset),
             cancellationToken);
 
+        await AppendWriteAheadLogAsync(
+            "kg_add",
+            "success",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["triple_id"] = tripleId,
+                ["subject"] = subject,
+                ["predicate"] = predicate,
+                ["object"] = @object,
+            },
+            cancellationToken);
+
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["success"] = true,
+            ["noop"] = false,
             ["triple_id"] = tripleId,
             ["fact"] = $"{subject} -> {predicate} -> {@object}",
         };
@@ -43,16 +100,68 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolKnowledgeGraphInvalidateAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var subject = GetRequiredString(arguments, "subject");
-        var predicate = GetRequiredString(arguments, "predicate");
-        var @object = GetRequiredString(arguments, "object");
-        var ended = GetOptionalString(arguments, "ended");
+        var subject = SanitizeEntityName(arguments, "subject");
+        var predicate = SanitizeBoundedText(GetRequiredString(arguments, "predicate"), "predicate", maxLength: 80, preserveNewlines: false);
+        var @object = SanitizeEntityName(arguments, "object");
+        var ended = SanitizeOptionalIsoDate(arguments, "ended");
+
+        await AppendWriteAheadLogAsync(
+            "kg_invalidate",
+            "intent",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["subject"] = subject,
+                ["predicate"] = predicate,
+                ["object"] = @object,
+                ["ended"] = ended,
+            },
+            cancellationToken);
+
+        var existingTriple = await FindCurrentTripleAsync(subject, predicate, @object, cancellationToken);
+        if (existingTriple is null)
+        {
+            await AppendWriteAheadLogAsync(
+                "kg_invalidate",
+                "noop",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["subject"] = subject,
+                    ["predicate"] = predicate,
+                    ["object"] = @object,
+                    ["ended"] = ended ?? "today",
+                    ["reason"] = "already_invalidated",
+                },
+                cancellationToken);
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["success"] = true,
+                ["noop"] = true,
+                ["reason"] = "already_invalidated",
+                ["fact"] = $"{subject} -> {predicate} -> {@object}",
+                ["ended"] = ended ?? "today",
+            };
+        }
 
         await _knowledgeGraphStore.InvalidateAsync(subject, predicate, @object, ended, cancellationToken);
+
+        await AppendWriteAheadLogAsync(
+            "kg_invalidate",
+            "success",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["triple_id"] = existingTriple.Id,
+                ["subject"] = subject,
+                ["predicate"] = predicate,
+                ["object"] = @object,
+                ["ended"] = ended ?? "today",
+            },
+            cancellationToken);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["success"] = true,
+            ["noop"] = false,
             ["fact"] = $"{subject} -> {predicate} -> {@object}",
             ["ended"] = ended ?? "today",
         };
@@ -60,7 +169,7 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolKnowledgeGraphTimelineAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var entity = GetOptionalString(arguments, "entity");
+        var entity = SanitizeOptionalEntityName(arguments, "entity");
         var timeline = await _knowledgeGraphStore.TimelineAsync(entity, cancellationToken);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -86,8 +195,8 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolTraverseAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var startRoom = GetRequiredString(arguments, "start_room");
-        var maxHops = GetInt(arguments, "max_hops", 2);
+        var startRoom = SanitizeRequiredSlug(arguments, "start_room");
+        var maxHops = ClampPositiveInt(GetInt(arguments, "max_hops", 2), 2, 5);
 
         if (!await HasCollectionAsync(cancellationToken))
         {
@@ -127,8 +236,8 @@ public sealed partial class MemShackMcpServer
 
     private async Task<object?> ToolFindTunnelsAsync(JsonObject arguments, CancellationToken cancellationToken)
     {
-        var wingA = GetOptionalString(arguments, "wing_a");
-        var wingB = GetOptionalString(arguments, "wing_b");
+        var wingA = SanitizeOptionalNullableSlug(arguments, "wing_a");
+        var wingB = SanitizeOptionalNullableSlug(arguments, "wing_b");
 
         if (!await HasCollectionAsync(cancellationToken))
         {

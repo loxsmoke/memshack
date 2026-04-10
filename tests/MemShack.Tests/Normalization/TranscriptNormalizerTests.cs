@@ -65,6 +65,57 @@ public sealed class TranscriptNormalizerTests
     }
 
     [TestMethod]
+    public void NormalizeContent_ParsesChatGptJson()
+    {
+        var content = """
+            {
+              "mapping": {
+                "root": { "id": "root", "parent": null, "children": ["user1"] },
+                "user1": {
+                  "id": "user1",
+                  "parent": "root",
+                  "children": ["assistant1"],
+                  "message": {
+                    "author": { "role": "user" },
+                    "content": { "parts": ["pleese explain the fix"] }
+                  }
+                },
+                "assistant1": {
+                  "id": "assistant1",
+                  "parent": "user1",
+                  "children": [],
+                  "message": {
+                    "author": { "role": "assistant" },
+                    "content": { "parts": ["We fixed the auth refresh path."] }
+                  }
+                }
+              }
+            }
+            """;
+
+        var result = _normalizer.NormalizeContent(content, ".json");
+
+        Assert.Contains("> please explain the fix", result);
+        Assert.Contains("We fixed the auth refresh path.", result);
+    }
+
+    [TestMethod]
+    public void NormalizeContent_ParsesSlackJson()
+    {
+        var content = """
+            [
+              { "type": "message", "user": "U1", "text": "befor lunch can we sync?" },
+              { "type": "message", "user": "U2", "text": "Yes, let's do it." }
+            ]
+            """;
+
+        var result = _normalizer.NormalizeContent(content, ".json");
+
+        Assert.Contains("> before lunch can we sync?", result);
+        Assert.Contains("Yes, let's do it.", result);
+    }
+
+    [TestMethod]
     public void NormalizeContent_SpellchecksJsonUserTurns()
     {
         var content = """
@@ -104,5 +155,29 @@ public sealed class TranscriptNormalizerTests
         Assert.Contains("> already know Riley", result);
         Assert.Contains("> before we start", result);
         Assert.Contains("> please continue", result);
+    }
+
+    [TestMethod]
+    public void NormalizeFromFile_RejectsExtremelyLargeInputs()
+    {
+        using var temp = new TemporaryDirectory();
+        var largePath = temp.GetPath("huge.jsonl");
+        using (var stream = File.Open(largePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            stream.SetLength(500L * 1024 * 1024 + 1);
+        }
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            _normalizer.NormalizeFromFile(largePath);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        var actualException = Assert.NotNull(exception);
+        Assert.Contains("File is too large to normalize", actualException.Message);
     }
 }

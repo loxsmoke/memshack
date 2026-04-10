@@ -1,0 +1,16 @@
+{
+  "Stop": [
+    {
+      "type": "command",
+      "command": "bash ../../hooks/memshack_save_hook.sh",
+      "timeout": 30
+    }
+  ],
+  "PreCompact": [
+    {
+      "type": "command",
+      "command": "bash ../../hooks/memshack_precompact_hook.sh",
+      "timeout": 30
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "memshack": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/MemShack.McpServer",
+        "--"
+      ],
+      "cwd": "../.."
+    }
+  }
+}

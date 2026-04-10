@@ -1,0 +1,42 @@
+{
+  "name": "memshack",
+  "version": "0.1.0",
+  "description": "Repo-local MemShack integration metadata for Codex.",
+  "author": {
+    "name": "LoxSmoke",
+    "url": "https://github.com/loxsmoke"
+  },
+  "homepage": "https://github.com/loxsmoke/memshack",
+  "repository": "https://github.com/loxsmoke/memshack",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "hooks",
+    "codex",
+    "memshack"
+  ],
+  "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "MemShack",
+    "shortDescription": "Repo-local memory tooling for Codex and Claude Code.",
+    "longDescription": "Adds repo-local metadata for MemShack's MCP server, hook assets, and integration docs. The actual server and scripts remain in this repository.",
+    "developerName": "LoxSmoke",
+    "category": "Productivity",
+    "capabilities": [
+      "Local",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/loxsmoke/memshack",
+    "privacyPolicyURL": "https://github.com/loxsmoke/memshack",
+    "termsOfServiceURL": "https://github.com/loxsmoke/memshack",
+    "defaultPrompt": [
+      "Show me the MemShack MCP setup command.",
+      "Explain how to install the MemShack save hooks.",
+      "Find the MemShack instruction assets for Codex."
+    ],
+    "brandColor": "#1F6FEB"
+  }
+}

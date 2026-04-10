@@ -23,6 +23,9 @@ public sealed class CliSmokeTests
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
         Assert.Contains("mems mine <dir>", stdout.ToString());
+        Assert.Contains("mems hook", stdout.ToString());
+        Assert.Contains("mems instructions", stdout.ToString());
+        Assert.Contains("mems mcp", stdout.ToString());
         Assert.Contains("mems shutdowndb", stdout.ToString());
         Assert.Contains("mems wake-up", stdout.ToString());
     }
@@ -44,7 +47,134 @@ public sealed class CliSmokeTests
         AssertBanner(stdout.ToString());
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
+        Assert.Contains("mems hook", stdout.ToString());
+        Assert.Contains("mems instructions", stdout.ToString());
+        Assert.Contains("mems mcp", stdout.ToString());
         Assert.Equal(string.Empty, stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Hook_PrintsSetupGuidance()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["hook"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack hook setup:", stdout.ToString());
+        Assert.Contains("Hook assets:", stdout.ToString());
+        Assert.Contains(".claude/settings.local.json", stdout.ToString());
+        Assert.Contains(".codex/hooks.json", stdout.ToString());
+        Assert.Contains("bash ", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Instructions_PrintsSetupGuidance()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["instructions"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack instructions setup:", stdout.ToString());
+        Assert.Contains("Instruction assets:", stdout.ToString());
+        Assert.Contains("codex.md", stdout.ToString());
+        Assert.Contains("claude-code.md", stdout.ToString());
+        Assert.Contains("mems wake-up", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Hook_WithOutputDir_ExportsHookAssets()
+    {
+        using var temp = new TemporaryDirectory();
+        var exportRoot = temp.GetPath("hook-export");
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["hook", "--output-dir", exportRoot], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.True(File.Exists(Path.Combine(exportRoot, "README.md")));
+        Assert.True(File.Exists(Path.Combine(exportRoot, "memshack_save_hook.sh")));
+        Assert.True(File.Exists(Path.Combine(exportRoot, "memshack_precompact_hook.sh")));
+        Assert.Contains("Exported the hook files", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Hook_WithUnexpectedArgument_PrintsUsage()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["hook", "--bad-flag"], stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout.ToString());
+        Assert.Contains("Usage: mems hook [--output-dir <dir>]", stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Instructions_WithOutputDir_ExportsInstructionAssets()
+    {
+        using var temp = new TemporaryDirectory();
+        var exportRoot = temp.GetPath("instructions-export");
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["instructions", "--output-dir", exportRoot], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.True(File.Exists(Path.Combine(exportRoot, "README.md")));
+        Assert.True(File.Exists(Path.Combine(exportRoot, "codex.md")));
+        Assert.True(File.Exists(Path.Combine(exportRoot, "claude-code.md")));
+        Assert.Contains("Exported the instruction files", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Instructions_WithUnexpectedArgument_PrintsUsage()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["instructions", "--bad-flag"], stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout.ToString());
+        Assert.Contains("Usage: mems instructions [--output-dir <dir>]", stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Mcp_PrintsSetupGuidance()
+    {
+        using var temp = new TemporaryDirectory();
+        var palacePath = temp.GetPath("palace");
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "mcp"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack MCP quick setup:", stdout.ToString());
+        Assert.Contains("claude mcp add mempalace -- dotnet run --project", stdout.ToString());
+        Assert.Contains("--palace", stdout.ToString());
     }
 
     [TestMethod]
@@ -142,6 +272,45 @@ public sealed class CliSmokeTests
         Assert.Equal(string.Empty, stderr.ToString());
         Assert.Contains("Configured to use an external Chroma server.", stdout.ToString());
         Assert.Contains("http://example.test:8000", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Search_WithoutPalace_PrintsInitAndMineGuidance()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var palacePath = temp.GetPath("palace");
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "vector_store_backend": "compatibility"
+            }
+            """);
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "search", "missing palace"], stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout.ToString());
+        Assert.Contains($"No palace found at {palacePath}", stderr.ToString());
+        Assert.Contains("Run: mems init <dir> then mems mine <dir>", stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Search_WithoutQuery_PrintsUsage()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["search"], stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout.ToString());
+        Assert.Contains("Usage: mems search <query> [--wing NAME] [--room NAME]", stderr.ToString());
     }
 
     [TestMethod]

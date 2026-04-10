@@ -87,6 +87,9 @@ public sealed class CliApp
                 "mine" => await RunMineAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "split" => await RunSplitAsync(commandArgs, stdout, stderr, cancellationToken),
                 "search" => await RunSearchAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
+                "hook" => await RunHookAsync(commandArgs, stdout, stderr, cancellationToken),
+                "instructions" => await RunInstructionsAsync(commandArgs, stdout, stderr, cancellationToken),
+                "mcp" => await RunMcpAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "compress" => await RunCompressAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "wake-up" => await RunWakeUpAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "shutdowndb" => await RunShutdownDbAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
@@ -894,11 +897,197 @@ public sealed class CliApp
         var result = await service.SearchMemoriesAsync(string.Join(' ', queryParts), wing, room, results, cancellationToken);
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
-            await stderr.WriteLineAsync(result.Error);
+            if (result.Error.StartsWith("No palace found at ", StringComparison.Ordinal))
+            {
+                await stderr.WriteLineAsync($"\n  {result.Error}");
+                await stderr.WriteLineAsync($"  Run: {_commandName} init <dir> then {_commandName} mine <dir>");
+            }
+            else
+            {
+                await stderr.WriteLineAsync(result.Error);
+            }
+
             return 1;
         }
 
         await stdout.WriteAsync(await service.FormatSearchAsync(result.Query, wing, room, results, cancellationToken));
+        return 0;
+    }
+
+    private async Task<int> RunHookAsync(
+        IReadOnlyList<string> args,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var parser = new ArgumentParser(args);
+        string? outputDirectory = null;
+
+        while (parser.TryReadNext(out var token))
+        {
+            switch (token)
+            {
+                case "--output-dir":
+                    outputDirectory = parser.RequireValue(token);
+                    break;
+                default:
+                    throw new CliUsageException($"Usage: {_commandName} hook [--output-dir <dir>]");
+            }
+        }
+
+        var assetDirectory = ResolveAssetDirectory("hooks");
+        if (assetDirectory is null)
+        {
+            await stderr.WriteLineAsync("Could not find packaged MemShack hook assets.");
+            return 1;
+        }
+
+        var materializedDirectory = string.IsNullOrWhiteSpace(outputDirectory)
+            ? assetDirectory
+            : ExportAssetDirectory(assetDirectory, outputDirectory);
+        var saveHookPath = Path.Combine(materializedDirectory, "memshack_save_hook.sh");
+        var precompactHookPath = Path.Combine(materializedDirectory, "memshack_precompact_hook.sh");
+        var saveHookCommand = BuildBashHookCommand(saveHookPath);
+        var precompactHookCommand = BuildBashHookCommand(precompactHookPath);
+
+        await stdout.WriteLineAsync("MemShack hook setup:");
+        await stdout.WriteLineAsync($"  Hook assets: {materializedDirectory}");
+        if (!string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            await stdout.WriteLineAsync("  Exported the hook files above so you can point your editor at a stable path.");
+        }
+
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync("  Claude Code (.claude/settings.local.json):");
+        await stdout.WriteLineAsync("  {");
+        await stdout.WriteLineAsync("    \"hooks\": {");
+        await stdout.WriteLineAsync("      \"Stop\": [{");
+        await stdout.WriteLineAsync("        \"matcher\": \"*\",");
+        await stdout.WriteLineAsync("        \"hooks\": [{");
+        await stdout.WriteLineAsync("          \"type\": \"command\",");
+        await stdout.WriteLineAsync($"          \"command\": {JsonSerializer.Serialize(saveHookCommand)},");
+        await stdout.WriteLineAsync("          \"timeout\": 30");
+        await stdout.WriteLineAsync("        }]");
+        await stdout.WriteLineAsync("      }],");
+        await stdout.WriteLineAsync("      \"PreCompact\": [{");
+        await stdout.WriteLineAsync("        \"hooks\": [{");
+        await stdout.WriteLineAsync("          \"type\": \"command\",");
+        await stdout.WriteLineAsync($"          \"command\": {JsonSerializer.Serialize(precompactHookCommand)},");
+        await stdout.WriteLineAsync("          \"timeout\": 30");
+        await stdout.WriteLineAsync("        }]");
+        await stdout.WriteLineAsync("      }]");
+        await stdout.WriteLineAsync("    }");
+        await stdout.WriteLineAsync("  }");
+
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync("  Codex CLI (.codex/hooks.json):");
+        await stdout.WriteLineAsync("  {");
+        await stdout.WriteLineAsync("    \"Stop\": [{");
+        await stdout.WriteLineAsync("      \"type\": \"command\",");
+        await stdout.WriteLineAsync($"      \"command\": {JsonSerializer.Serialize(saveHookCommand)},");
+        await stdout.WriteLineAsync("      \"timeout\": 30");
+        await stdout.WriteLineAsync("    }],");
+        await stdout.WriteLineAsync("    \"PreCompact\": [{");
+        await stdout.WriteLineAsync("      \"type\": \"command\",");
+        await stdout.WriteLineAsync($"      \"command\": {JsonSerializer.Serialize(precompactHookCommand)},");
+        await stdout.WriteLineAsync("      \"timeout\": 30");
+        await stdout.WriteLineAsync("    }]");
+        await stdout.WriteLineAsync("  }");
+
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync("  Notes:");
+        await stdout.WriteLineAsync("  - These are Bash hook scripts. On Windows, run them through Git Bash or WSL.");
+        await stdout.WriteLineAsync($"  - If you prefer tool-only integration, use: {_commandName} mcp");
+        await stdout.WriteLineAsync($"  - See {Path.Combine(materializedDirectory, "README.md")} for details.");
+        return 0;
+    }
+
+    private async Task<int> RunInstructionsAsync(
+        IReadOnlyList<string> args,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var parser = new ArgumentParser(args);
+        string? outputDirectory = null;
+
+        while (parser.TryReadNext(out var token))
+        {
+            switch (token)
+            {
+                case "--output-dir":
+                    outputDirectory = parser.RequireValue(token);
+                    break;
+                default:
+                    throw new CliUsageException($"Usage: {_commandName} instructions [--output-dir <dir>]");
+            }
+        }
+
+        var assetDirectory = ResolveAssetDirectory("instructions");
+        if (assetDirectory is null)
+        {
+            await stderr.WriteLineAsync("Could not find packaged MemShack instruction assets.");
+            return 1;
+        }
+
+        var materializedDirectory = string.IsNullOrWhiteSpace(outputDirectory)
+            ? assetDirectory
+            : ExportAssetDirectory(assetDirectory, outputDirectory);
+
+        await stdout.WriteLineAsync("MemShack instructions setup:");
+        await stdout.WriteLineAsync($"  Instruction assets: {materializedDirectory}");
+        if (!string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            await stdout.WriteLineAsync("  Exported the instruction files above so you can copy them into your editor/tool setup.");
+        }
+
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync("  Files:");
+        await stdout.WriteLineAsync($"  - {Path.Combine(materializedDirectory, "README.md")}");
+        await stdout.WriteLineAsync($"  - {Path.Combine(materializedDirectory, "codex.md")}");
+        await stdout.WriteLineAsync($"  - {Path.Combine(materializedDirectory, "claude-code.md")}");
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync($"  Use {_commandName} wake-up for runtime context and {_commandName} mcp for tool integration.");
+        await stdout.WriteLineAsync("  These instruction assets document the repo-local setup and the current Bash-hook/plugin limitations.");
+        return 0;
+    }
+
+    private async Task<int> RunMcpAsync(
+        IReadOnlyList<string> args,
+        GlobalOptions globalOptions,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (args.Count > 0)
+        {
+            throw new CliUsageException($"Usage: {_commandName} mcp");
+        }
+
+        var palacePath = globalOptions.PalacePath;
+        var projectPath = TryResolveMcpServerProjectPath();
+        var baseCommand = projectPath is null
+            ? "dotnet run --project src/MemShack.McpServer --"
+            : $"dotnet run --project {QuoteCommandArgument(projectPath)} --";
+        var fullCommand = string.IsNullOrWhiteSpace(palacePath)
+            ? baseCommand
+            : $"{baseCommand} --palace {QuoteCommandArgument(Path.GetFullPath(PathUtilities.ExpandHome(palacePath)))}";
+
+        await stdout.WriteLineAsync("MemShack MCP quick setup:");
+        await stdout.WriteLineAsync($"  claude mcp add mempalace -- {fullCommand}");
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync("Run the server directly:");
+        await stdout.WriteLineAsync($"  {fullCommand}");
+
+        if (projectPath is null)
+        {
+            await stdout.WriteLineAsync();
+            await stdout.WriteLineAsync("Note: run this from the MemShack repo root so the relative project path resolves.");
+        }
+
         return 0;
     }
 
@@ -1252,6 +1441,72 @@ public sealed class CliApp
 
     private static IEnumerable<string> ExpandIncludeIgnored(IEnumerable<string> rawValues) =>
         rawValues.SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    private static string? TryResolveMcpServerProjectPath()
+    {
+        var repoRoot = TryResolveRepoRootPath();
+        if (repoRoot is null)
+        {
+            return null;
+        }
+
+        var candidate = Path.Combine(repoRoot, "src", "MemShack.McpServer", "MemShack.McpServer.csproj");
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    private static string QuoteCommandArgument(string value) =>
+        value.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
+
+    private static string? ResolveAssetDirectory(string assetDirectoryName)
+    {
+        var packagedCandidate = Path.Combine(Path.GetFullPath(AppContext.BaseDirectory), assetDirectoryName);
+        if (Directory.Exists(packagedCandidate))
+        {
+            return packagedCandidate;
+        }
+
+        var repoRoot = TryResolveRepoRootPath();
+        if (repoRoot is null)
+        {
+            return null;
+        }
+
+        var repoCandidate = Path.Combine(repoRoot, assetDirectoryName);
+        return Directory.Exists(repoCandidate) ? repoCandidate : null;
+    }
+
+    private static string ExportAssetDirectory(string sourceDirectory, string outputDirectory)
+    {
+        var destination = Path.GetFullPath(PathUtilities.ExpandHome(outputDirectory));
+        Directory.CreateDirectory(destination);
+        CopyDirectory(sourceDirectory, destination);
+        return destination;
+    }
+
+    private static string BuildBashHookCommand(string scriptPath)
+    {
+        var normalizedPath = Path.GetFullPath(scriptPath);
+        return $"bash {QuoteCommandArgument(normalizedPath)}";
+    }
+
+    private static string? TryResolveRepoRootPath()
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(AppContext.BaseDirectory));
+        while (current is not null)
+        {
+            var candidate = Path.Combine(current.FullName, "src", "MemShack.Cli", "MemShack.Cli.csproj");
+            if (File.Exists(candidate))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
 
     private IVectorStore CreateVectorStore(string palacePath, TextWriter? progressWriter = null)
     {
@@ -1686,6 +1941,9 @@ Commands:
                    [--include-ignored <path>] [--agent <name>] [--limit <n>]
                    [--dry-run] [--extract exchange|general]
   {{_commandName}} search <query> [--wing <name>] [--room <name>] [--results <n>]
+  {{_commandName}} hook
+  {{_commandName}} instructions
+  {{_commandName}} mcp
   {{_commandName}} compress [--wing <name>] [--dry-run] [--config <path>]
   {{_commandName}} wake-up [--wing <name>]
   {{_commandName}} shutdowndb

@@ -39,6 +39,11 @@ public sealed class SqliteKnowledgeGraphStoreTests
             "source_file",
             "extracted_at",
         ], tripleColumns);
+
+        await using var journalCommand = connection.CreateCommand();
+        journalCommand.CommandText = "PRAGMA journal_mode";
+        var journalMode = (string)(await journalCommand.ExecuteScalarAsync())!;
+        Assert.Equal("wal", journalMode);
     }
 
     [TestMethod]
@@ -84,6 +89,7 @@ public sealed class SqliteKnowledgeGraphStoreTests
         var stats = await store.StatsAsync();
 
         Assert.StartsWith("t_max_does_swimming_", tripleId);
+        Assert.Matches(@"^t_max_does_swimming_[a-f0-9]{12}$", tripleId);
         Assert.Equal(2, stats.Entities);
     }
 
@@ -199,6 +205,16 @@ public sealed class SqliteKnowledgeGraphStoreTests
 
         var globalTimeline = await storeMany.TimelineAsync();
         Assert.Equal(100, globalTimeline.Count);
+
+        using var tempEntityLimit = new TemporaryDirectory();
+        var storeEntityLimit = KnowledgeGraphTestFactory.CreateStore(tempEntityLimit);
+        for (var index = 0; index < 105; index++)
+        {
+            await storeEntityLimit.AddTripleAsync(new TripleRecord("Hub", "connected_to", $"Leaf {index}", ValidFrom: $"2026-01-{(index % 28) + 1:00}"));
+        }
+
+        var limitedEntityTimeline = await storeEntityLimit.TimelineAsync("Hub");
+        Assert.Equal(100, limitedEntityTimeline.Count);
     }
 
     [TestMethod]
@@ -215,6 +231,27 @@ public sealed class SqliteKnowledgeGraphStoreTests
         Assert.Equal(1, stats.ExpiredFacts);
         Assert.Contains("does", stats.RelationshipTypes);
         Assert.Contains("works_at", stats.RelationshipTypes);
+    }
+
+    [TestMethod]
+    public async Task RepeatedOperations_UseWalModeWithoutChangingQueryShapes()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = KnowledgeGraphTestFactory.CreateStore(temp);
+
+        for (var index = 0; index < 25; index++)
+        {
+            await store.AddTripleAsync(new TripleRecord($"Person {index}", "works_with", $"Person {index + 1}", ValidFrom: "2026-01-01"));
+        }
+
+        var relationshipResults = await store.QueryRelationshipAsync("works_with");
+        var timeline = await store.TimelineAsync();
+        var stats = await store.StatsAsync();
+
+        Assert.Equal(25, relationshipResults.Count);
+        Assert.Equal(25, timeline.Count);
+        Assert.Equal(26, stats.Entities);
+        Assert.Equal(25, stats.Triples);
     }
 
     private static async Task<IReadOnlyList<string>> ReadStringsAsync(SqliteConnection connection, string sql)

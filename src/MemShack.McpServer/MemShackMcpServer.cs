@@ -9,6 +9,7 @@ using MemShack.Application.Search;
 using MemShack.Core.Constants;
 using MemShack.Core.Interfaces;
 using MemShack.Core.Models;
+using MemShack.Core.Utilities;
 using MemShack.Infrastructure.Config;
 using MemShack.Infrastructure.Sqlite.KnowledgeGraph;
 using MemShack.Infrastructure.VectorStore;
@@ -17,7 +18,6 @@ namespace MemShack.McpServer;
 
 public sealed partial class MemShackMcpServer
 {
-    private const string ProtocolVersion = "2024-11-05";
     private const string ServerName = "mempalace";
     private const string ServerVersion = "3.0.0";
     private const string PalaceProtocol = """
@@ -57,6 +57,13 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
     };
 
     private static readonly JsonSerializerOptions CompactJsonOptions = new();
+    private static readonly string[] SupportedProtocolVersions =
+    [
+        "2025-11-25",
+        "2025-06-18",
+        "2025-03-26",
+        "2024-11-05",
+    ];
 
     private static readonly Regex TokenPattern = new(@"\b[a-z0-9_]+\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -84,15 +91,28 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
 
     public IReadOnlyList<McpToolDefinition> Tools => _tools;
 
-    public static MemShackMcpServer CreateDefault(string? configDirectory = null, string? knowledgeGraphPath = null)
+    public static MemShackMcpServer CreateDefault(string? configDirectory = null, string? knowledgeGraphPath = null, string? palacePath = null)
     {
         var configStore = new FileConfigStore();
         var config = configStore.Load(configDirectory);
+        if (!string.IsNullOrWhiteSpace(palacePath))
+        {
+            config = config with
+            {
+                PalacePath = Path.GetFullPath(PathUtilities.ExpandHome(palacePath)),
+            };
+        }
+
+        var resolvedKnowledgeGraphPath = knowledgeGraphPath;
+        if (string.IsNullOrWhiteSpace(resolvedKnowledgeGraphPath) && !string.IsNullOrWhiteSpace(palacePath))
+        {
+            resolvedKnowledgeGraphPath = Path.Combine(config.PalacePath, ConfigFileNames.KnowledgeGraphSqlite);
+        }
 
         return new MemShackMcpServer(
             config,
             VectorStoreFactory.Create(config),
-            new SqliteKnowledgeGraphStore(knowledgeGraphPath),
+            new SqliteKnowledgeGraphStore(resolvedKnowledgeGraphPath),
             new PalaceGraphBuilder());
     }
 
@@ -162,7 +182,7 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
                 requestId,
                 new JsonObject
                 {
-                    ["protocolVersion"] = ProtocolVersion,
+                    ["protocolVersion"] = NegotiateProtocolVersion(parameters),
                     ["capabilities"] = new JsonObject
                     {
                         ["tools"] = new JsonObject(),
@@ -224,9 +244,9 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
                     },
                 });
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            return CreateErrorResponse(requestId, -32000, exception.Message);
+            return CreateErrorResponse(requestId, -32000, "Internal tool error");
         }
     }
 
@@ -271,4 +291,16 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight.
     }
 
     private readonly record struct SchemaProperty(string Name, string Type, string Description);
+
+    private static string NegotiateProtocolVersion(JsonObject parameters)
+    {
+        var requested = parameters["protocolVersion"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(requested) &&
+            SupportedProtocolVersions.Contains(requested, StringComparer.Ordinal))
+        {
+            return requested;
+        }
+
+        return SupportedProtocolVersions[0];
+    }
 }

@@ -108,6 +108,41 @@ public sealed class ChromaHttpVectorStoreTests
     }
 
     [TestMethod]
+    public async Task SourceFileChecksRespectStoredSourceMtime()
+    {
+        using var temp = new TemporaryDirectory();
+        using var handler = new FakeChromaV2Handler();
+        using var httpClient = new HttpClient(handler);
+        var store = new ChromaHttpVectorStore("http://localhost:8000", httpClient: httpClient, embeddingGenerator: new TestTextEmbeddingGenerator());
+        var sourceFile = temp.GetPath("src", "auth.py");
+        var sourceMtimeUtcMs = 1_744_156_800_000L;
+
+        await store.EnsureCollectionAsync(CollectionNames.Drawers);
+        await store.AddDrawerAsync(
+            CollectionNames.Drawers,
+            new DrawerRecord(
+                "drawer_project_backend_1",
+                "JWT authentication uses refresh cookies",
+                new DrawerMetadata
+                {
+                    Wing = "project",
+                    Room = "backend",
+                    SourceFile = sourceFile,
+                    SourceMtimeUtcMs = sourceMtimeUtcMs,
+                    ChunkIndex = 0,
+                    AddedBy = "test",
+                    FiledAt = "2026-04-09T10:00:00",
+                    EmbeddingSignature = EmbeddingSignatures.Current,
+                }));
+
+        var hasMatchingMtime = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs);
+        var hasStaleMtime = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs + 1);
+
+        Assert.True(hasMatchingMtime);
+        Assert.False(hasStaleMtime);
+    }
+
+    [TestMethod]
     public async Task Search_UsesChromaDistanceForReportedSimilarity()
     {
         using var handler = new FixedDistanceQueryHandler(-0.75);

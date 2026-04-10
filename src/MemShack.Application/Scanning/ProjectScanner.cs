@@ -5,6 +5,8 @@ namespace MemShack.Application.Scanning;
 
 public sealed class ProjectScanner : IProjectScanner
 {
+    private const long MaxProjectFileBytes = 10L * 1024 * 1024;
+
     private static readonly HashSet<string> ReadableExtensions =
     [
         ".txt",
@@ -29,7 +31,7 @@ public sealed class ProjectScanner : IProjectScanner
         ".toml",
     ];
 
-    private static readonly HashSet<string> SkipDirectories =
+    private static readonly HashSet<string> UpstreamSkipDirectories =
     [
         ".git",
         "node_modules",
@@ -42,8 +44,6 @@ public sealed class ProjectScanner : IProjectScanner
         ".next",
         "coverage",
         ".mempalace",
-        ".dotnet",
-        ".nuget",
         ".ruff_cache",
         ".mypy_cache",
         ".pytest_cache",
@@ -56,6 +56,12 @@ public sealed class ProjectScanner : IProjectScanner
         ".eggs",
         "htmlcov",
         "target",
+    ];
+
+    private static readonly HashSet<string> AdditionalSkipDirectories =
+    [
+        ".dotnet",
+        ".nuget",
         "bin",
         "obj",
     ];
@@ -98,6 +104,11 @@ public sealed class ProjectScanner : IProjectScanner
 
             foreach (var directory in Directory.EnumerateDirectories(currentDirectory))
             {
+                if (IsSymlinkPath(directory))
+                {
+                    continue;
+                }
+
                 var name = Path.GetFileName(directory);
                 var forceInclude = IsForceIncluded(directory, projectPath, includePaths);
                 if (!forceInclude && ShouldSkipDirectory(name))
@@ -116,6 +127,11 @@ public sealed class ProjectScanner : IProjectScanner
 
             foreach (var file in Directory.EnumerateFiles(currentDirectory))
             {
+                if (IsSymlinkPath(file) || IsOversizedProjectFile(file))
+                {
+                    continue;
+                }
+
                 var fileName = Path.GetFileName(file);
                 var extension = Path.GetExtension(file);
                 var forceInclude = IsForceIncluded(file, projectPath, includePaths);
@@ -148,7 +164,41 @@ public sealed class ProjectScanner : IProjectScanner
     }
 
     private static bool ShouldSkipDirectory(string directoryName) =>
-        SkipDirectories.Contains(directoryName) || directoryName.EndsWith(".egg-info", StringComparison.Ordinal);
+        UpstreamSkipDirectories.Contains(directoryName) ||
+        AdditionalSkipDirectories.Contains(directoryName) ||
+        directoryName.EndsWith(".egg-info", StringComparison.Ordinal);
+
+    private static bool IsSymlinkPath(string path)
+    {
+        try
+        {
+            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsOversizedProjectFile(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length > MaxProjectFileBytes;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     private static bool IsExactForceInclude(string path, string projectPath, IReadOnlySet<string> includePaths)
     {

@@ -71,4 +71,34 @@ public sealed class LocalRoomDetectorTests
         Assert.Contains(rooms, room => room.Name == "frontend");
         Assert.Contains(rooms, room => room.Name == "team");
     }
+
+    [TestMethod]
+    public void DetectRoomsFromFolders_SkipsDependencyAndBuildDirectories()
+    {
+        using var temp = new TemporaryDirectory();
+        Directory.CreateDirectory(temp.GetPath("node_modules"));
+        Directory.CreateDirectory(temp.GetPath("obj"));
+        Directory.CreateDirectory(temp.GetPath("services"));
+
+        var rooms = _detector.DetectRoomsFromFolders(temp.Root);
+
+        Assert.Contains(rooms, room => room.Name == "backend");
+        Assert.DoesNotContain(rooms, room => room.Name == "node_modules");
+        Assert.DoesNotContain(rooms, room => room.Name == "obj");
+    }
+
+    [TestMethod]
+    public void DetectRoomsFromFiles_FindsConfigurationAndPlanningPatterns()
+    {
+        using var temp = new TemporaryDirectory();
+        temp.WriteFile("deploy_config.yaml", "name: api");
+        temp.WriteFile("infra_settings.toml", "port = 8080");
+        temp.WriteFile("roadmap_notes.md", "roadmap");
+        temp.WriteFile("strategy_outline.md", "strategy");
+
+        var rooms = _detector.DetectRoomsFromFiles(temp.Root);
+
+        Assert.Contains(rooms, room => room.Name == "configuration");
+        Assert.Contains(rooms, room => room.Name == "planning");
+    }
 }

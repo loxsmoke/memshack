@@ -111,4 +111,46 @@ public sealed class ConversationMinerIntegrationTests
         Assert.DoesNotContain(files, file => file.Contains("tool-results", StringComparison.Ordinal));
         Assert.DoesNotContain(files, file => file.EndsWith(".meta.json", StringComparison.Ordinal));
     }
+
+    [TestMethod]
+    public async Task ConversationMining_RemainsPathOnlyForSkipChecks()
+    {
+        using var temp = new TemporaryDirectory();
+        var convoRoot = temp.GetPath("conversations");
+        Directory.CreateDirectory(convoRoot);
+        var transcriptPath = Path.Combine(convoRoot, "chat.txt");
+        File.WriteAllText(transcriptPath, """
+            > What changed?
+            We fixed the refresh token bug.
+
+            > What next?
+            Add tests.
+            """);
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var miner = new ConversationMiner(
+            new TranscriptNormalizer(),
+            new ConversationChunker(),
+            new GeneralMemoryExtractor(),
+            store);
+
+        var firstRun = await miner.MineAsync(convoRoot, wing: "path_only");
+
+        File.WriteAllText(transcriptPath, """
+            > What changed?
+            We replaced the whole auth flow.
+
+            > What next?
+            Reindex everything.
+            """);
+        File.SetLastWriteTimeUtc(transcriptPath, new DateTime(2026, 4, 10, 12, 0, 0, DateTimeKind.Utc));
+
+        var secondRun = await miner.MineAsync(convoRoot, wing: "path_only");
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.True(firstRun.DrawersFiled > 0);
+        Assert.Equal(0, secondRun.DrawersFiled);
+        Assert.Equal(1, secondRun.FilesSkipped);
+        Assert.NotEmpty(drawers);
+    }
 }

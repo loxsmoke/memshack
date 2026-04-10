@@ -12,6 +12,8 @@ namespace MemShack.Infrastructure.Sqlite.KnowledgeGraph;
 
 public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
 {
+    private const int SqliteBusyTimeoutSeconds = 10;
+
     public SqliteKnowledgeGraphStore(string? dbPath = null)
     {
         DatabasePath = ResolveDatabasePath(dbPath);
@@ -42,8 +44,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         var entityId = NormalizeEntityId(entity.Name);
         var propertiesJson = JsonSerializer.Serialize(entity.Properties ?? new Dictionary<string, string>(StringComparer.Ordinal));
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -65,8 +66,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         var objectId = NormalizeEntityId(triple.Object);
         var predicate = NormalizePredicate(triple.Predicate);
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
         using var transaction = connection.BeginTransaction();
 
         await InsertEntityIfMissingAsync(connection, transaction, subjectId, triple.Subject, cancellationToken);
@@ -95,7 +95,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
             }
         }
 
-        var tripleId = GenerateTripleId(subjectId, predicate, objectId, triple.ValidFrom);
+        var tripleId = GenerateTripleId(subjectId, predicate, objectId, triple.ValidFrom, triple.ValidTo);
 
         await using (var insertCommand = connection.CreateCommand())
         {
@@ -150,8 +150,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         var normalizedPredicate = NormalizePredicate(predicate);
         var endedDate = ended ?? DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -178,8 +177,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         var entityId = NormalizeEntityId(entity);
         var results = new List<TripleRecord>();
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         if (direction is "outgoing" or "both")
         {
@@ -226,8 +224,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         var normalizedPredicate = NormalizePredicate(predicate);
         var results = new List<TripleRecord>();
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -275,8 +272,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
     {
         var results = new List<TripleRecord>();
 
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         if (string.IsNullOrWhiteSpace(entityName))
@@ -317,6 +313,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
                 JOIN entities o ON t.object = o.id
                 WHERE t.subject = $entityId OR t.object = $entityId
                 ORDER BY t.valid_from IS NULL, t.valid_from ASC
+                LIMIT 100
                 """;
             command.Parameters.AddWithValue("$entityId", NormalizeEntityId(entityName));
         }
@@ -332,8 +329,7 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
 
     public async Task<KnowledgeGraphStats> StatsAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = OpenConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConfiguredConnectionAsync(cancellationToken);
 
         var entities = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM entities", cancellationToken);
         var triples = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM triples", cancellationToken);
@@ -368,11 +364,11 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         return MempalaceDefaults.GetDefaultKnowledgeGraphPath(PathUtilities.GetHomeDirectory());
     }
 
-    private static string GenerateTripleId(string subjectId, string predicate, string objectId, string? validFrom)
+    private static string GenerateTripleId(string subjectId, string predicate, string objectId, string? validFrom, string? validTo)
     {
-        var hashInput = $"{validFrom}{DateTime.Now:O}";
-        var hashBytes = MD5.HashData(Encoding.UTF8.GetBytes(hashInput));
-        var hash = Convert.ToHexString(hashBytes).ToLowerInvariant()[..8];
+        var hashInput = $"{validFrom}|{validTo}|{DateTime.UtcNow:O}";
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(hashInput));
+        var hash = Convert.ToHexString(hashBytes).ToLowerInvariant()[..12];
         return $"t_{subjectId}_{predicate}_{objectId}_{hash}";
     }
 
@@ -463,18 +459,55 @@ public sealed class SqliteKnowledgeGraphStore : IKnowledgeGraphStore
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
-    private SqliteConnection OpenConnection() =>
+    // Keep connections short-lived to avoid lingering SQLite file locks across CLI commands and tests.
+    // WAL mode preserves the concurrency and durability characteristics we want without holding one
+    // process-wide connection open for the entire lifetime of the store.
+    private SqliteConnection CreateConnection() =>
         new(new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false,
+            DefaultTimeout = SqliteBusyTimeoutSeconds,
         }.ToString());
+
+    private async Task<SqliteConnection> OpenConfiguredConnectionAsync(CancellationToken cancellationToken)
+    {
+        var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await ConfigureConnectionAsync(connection, cancellationToken);
+        return connection;
+    }
+
+    private static async Task ConfigureConnectionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 10000;
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static void ConfigureConnection(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 10000;
+            """;
+        command.ExecuteNonQuery();
+    }
 
     private void InitializeDatabase()
     {
-        using var connection = OpenConnection();
+        using var connection = CreateConnection();
         connection.Open();
+        ConfigureConnection(connection);
 
         using var command = connection.CreateCommand();
         command.CommandText = """

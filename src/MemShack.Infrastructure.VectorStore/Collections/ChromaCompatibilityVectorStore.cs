@@ -152,13 +152,26 @@ public sealed class ChromaCompatibilityVectorStore : IVectorStore
         string collectionName,
         string sourceFile,
         string? embeddingSignature = null,
+        long? sourceMtimeUtcMs = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedSourceFile = Path.GetFullPath(sourceFile);
         var drawers = await GetDrawersAsync(collectionName, cancellationToken: cancellationToken);
-        return drawers.Any(drawer =>
+        var existing = drawers.FirstOrDefault(drawer =>
             string.Equals(Path.GetFullPath(drawer.Metadata.SourceFile), normalizedSourceFile, StringComparison.OrdinalIgnoreCase) &&
             (embeddingSignature is null || string.Equals(drawer.Metadata.EmbeddingSignature, embeddingSignature, StringComparison.Ordinal)));
+        if (existing is null)
+        {
+            return false;
+        }
+
+        if (!sourceMtimeUtcMs.HasValue)
+        {
+            return true;
+        }
+
+        return existing.Metadata.SourceMtimeUtcMs.HasValue &&
+               existing.Metadata.SourceMtimeUtcMs.Value == sourceMtimeUtcMs.Value;
     }
 
     public async Task<bool> DeleteSourceFileAsync(
@@ -236,6 +249,7 @@ public sealed class ChromaCompatibilityVectorStore : IVectorStore
             ["wing"] = metadata.Wing,
             ["room"] = metadata.Room,
             ["source_file"] = metadata.SourceFile,
+            [MetadataKeys.SourceMtime] = metadata.SourceMtimeUtcMs,
             ["chunk_index"] = metadata.ChunkIndex,
             ["added_by"] = metadata.AddedBy,
             ["filed_at"] = metadata.FiledAt,

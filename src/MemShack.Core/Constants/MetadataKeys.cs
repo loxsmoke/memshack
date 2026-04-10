@@ -5,6 +5,7 @@ public static class MetadataKeys
     public const string Wing = "wing";
     public const string Room = "room";
     public const string SourceFile = "source_file";
+    public const string SourceMtime = "source_mtime";
     public const string ChunkIndex = "chunk_index";
     public const string AddedBy = "added_by";
     public const string FiledAt = "filed_at";

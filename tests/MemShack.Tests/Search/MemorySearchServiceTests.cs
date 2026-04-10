@@ -78,4 +78,29 @@ public sealed class MemorySearchServiceTests
         Assert.Contains("Source: auth.py", output);
         Assert.Contains("Match:", output);
     }
+
+    [TestMethod]
+    public async Task SearchMemories_RanksMostRelevantTopicFirst()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = await SeededPalaceFactory.CreateAsync(temp);
+        var service = new MemorySearchService(store, temp.GetPath("palace"));
+
+        var result = await service.SearchMemoriesAsync("customer events indexed tables");
+
+        var hit = Assert.Single(result.Results.Take(1));
+        Assert.Equal("database.sql", hit.SourceFile);
+    }
+
+    [TestMethod]
+    public async Task FormatSearch_ReportsWhenNothingMatches()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = await SeededPalaceFactory.CreateAsync(temp);
+        var service = new MemorySearchService(store, temp.GetPath("palace"));
+
+        var output = await service.FormatSearchAsync("astronaut moon landing");
+
+        Assert.Contains("No results found for: \"astronaut moon landing\"", output);
+    }
 }

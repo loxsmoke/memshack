@@ -79,8 +79,7 @@ public sealed class ProjectMiner
             totalDrawers += result.DrawersAdded;
             if (result.DrawersAdded > 0)
             {
-                var summaryRoom = DetectRoom(file, string.Empty, config.Rooms, projectPath);
-                roomCounts[summaryRoom] = roomCounts.TryGetValue(summaryRoom, out var count)
+                roomCounts[result.Room] = roomCounts.TryGetValue(result.Room, out var count)
                     ? count + 1
                     : 1;
                 fileResults.Add(new MiningFileResult(index + 1, file, result.Room, result.DrawersAdded));
@@ -111,8 +110,9 @@ public sealed class ProjectMiner
         CancellationToken cancellationToken)
     {
         var sourceFile = Path.GetFullPath(filePath);
+        var sourceMtimeUtcMs = TryGetSourceMtimeUtcMs(sourceFile);
         if (!dryRun &&
-            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, cancellationToken))
+            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, sourceMtimeUtcMs, cancellationToken))
         {
             return new FileProcessingResult(0, "general");
         }
@@ -160,6 +160,7 @@ public sealed class ProjectMiner
                     Wing = wing,
                     Room = room,
                     SourceFile = sourceFile,
+                    SourceMtimeUtcMs = sourceMtimeUtcMs,
                     ChunkIndex = chunk.ChunkIndex,
                     AddedBy = agent,
                     FiledAt = MiningUtilities.NowIso(),
@@ -256,6 +257,22 @@ public sealed class ProjectMiner
         }
 
         return count;
+    }
+
+    private static long? TryGetSourceMtimeUtcMs(string sourceFile)
+    {
+        try
+        {
+            return new DateTimeOffset(File.GetLastWriteTimeUtc(sourceFile)).ToUnixTimeMilliseconds();
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private sealed record FileProcessingResult(int DrawersAdded, string Room);
