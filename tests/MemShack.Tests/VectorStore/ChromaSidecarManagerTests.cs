@@ -252,6 +252,39 @@ public sealed class ChromaSidecarManagerTests
     }
 
     [TestMethod]
+    public void TryGetOrStart_AutoInstallReportsDownloadProgress()
+    {
+        using var temp = new TemporaryDirectory();
+        var palacePath = temp.GetPath("palace");
+        var configDirectory = temp.GetPath("config");
+        Directory.CreateDirectory(palacePath);
+        Directory.CreateDirectory(configDirectory);
+        using var downloadClient = new HttpClient(new BootstrapChromaHandler("cli-9.9.9", new string('x', 4096)));
+        using var healthClient = new HttpClient(new HealthyChromaHandler("http://127.0.0.1:43123"));
+        var progressUpdates = new List<ChromaDownloadProgress>();
+
+        var manager = new ChromaSidecarManager(
+            applicationBaseDirectory: temp.Root,
+            httpClient: healthClient,
+            downloadHttpClient: downloadClient,
+            processStarter: _ => new FakeSidecarProcess(id: 8126),
+            portAllocator: () => 43123,
+            downloadProgress: progressUpdates.Add,
+            startupTimeout: TimeSpan.FromSeconds(1),
+            pollInterval: TimeSpan.Zero);
+
+        _ = manager.TryGetOrStart(CreateConfig(palacePath) with { ConfigDirectory = configDirectory });
+
+        Assert.True(progressUpdates.Count >= 2);
+        Assert.Equal(0L, progressUpdates[0].BytesDownloaded);
+        Assert.False(progressUpdates[0].IsCompleted);
+        var finalProgress = progressUpdates[^1];
+        Assert.True(finalProgress.IsCompleted);
+        Assert.True(finalProgress.BytesDownloaded >= 4096);
+        Assert.Equal(finalProgress.BytesDownloaded, finalProgress.TotalBytes);
+    }
+
+    [TestMethod]
     public void Shutdown_KillsRecordedProcessAndClearsState()
     {
         using var temp = new TemporaryDirectory();

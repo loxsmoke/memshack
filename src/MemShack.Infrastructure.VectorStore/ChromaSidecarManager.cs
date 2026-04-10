@@ -26,6 +26,7 @@ public sealed class ChromaSidecarManager
     private readonly string _applicationBaseDirectory;
     private readonly HttpClient _downloadHttpClient;
     private readonly HttpClient _httpClient;
+    private readonly Action<ChromaDownloadProgress>? _downloadProgress;
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<IReadOnlyList<ChromaRunningProcess>> _listRunningChromaProcesses;
     private readonly Func<int> _portAllocator;
@@ -43,12 +44,14 @@ public sealed class ChromaSidecarManager
         Func<int, bool>? isProcessAlive = null,
         Func<IReadOnlyList<ChromaRunningProcess>>? listRunningChromaProcesses = null,
         Func<int, bool>? tryKillProcessById = null,
+        Action<ChromaDownloadProgress>? downloadProgress = null,
         TimeSpan? startupTimeout = null,
         TimeSpan? pollInterval = null)
     {
         _applicationBaseDirectory = Path.GetFullPath(applicationBaseDirectory ?? AppContext.BaseDirectory);
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         _downloadHttpClient = downloadHttpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+        _downloadProgress = downloadProgress;
         _processStarter = processStarter ?? StartProcess;
         _portAllocator = portAllocator ?? GetFreePort;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
@@ -255,11 +258,12 @@ public sealed class ChromaSidecarManager
             {
                 using var response = _downloadHttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
                 response.EnsureSuccessStatusCode();
+                var totalBytes = response.Content.Headers.ContentLength;
 
                 using (var sourceStream = response.Content.ReadAsStream())
                 using (var targetStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
-                    sourceStream.CopyTo(targetStream);
+                    CopyToWithProgress(sourceStream, targetStream, asset, totalBytes);
                     targetStream.Flush();
                 }
 
@@ -376,6 +380,29 @@ public sealed class ChromaSidecarManager
         }
 
         return null;
+    }
+
+    private void CopyToWithProgress(Stream sourceStream, Stream targetStream, string assetName, long? totalBytes)
+    {
+        var progress = _downloadProgress;
+        progress?.Invoke(new ChromaDownloadProgress(assetName, 0, totalBytes, IsCompleted: false));
+
+        var buffer = new byte[81920];
+        long bytesDownloaded = 0;
+        while (true)
+        {
+            var read = sourceStream.Read(buffer, 0, buffer.Length);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            targetStream.Write(buffer, 0, read);
+            bytesDownloaded += read;
+            progress?.Invoke(new ChromaDownloadProgress(assetName, bytesDownloaded, totalBytes, IsCompleted: false));
+        }
+
+        progress?.Invoke(new ChromaDownloadProgress(assetName, bytesDownloaded, totalBytes, IsCompleted: true));
     }
 
     private async Task WaitForHealthyAsync(string baseUrl, IChromaSidecarProcess process)
@@ -830,6 +857,12 @@ public sealed class ChromaSidecarManager
         public void Kill() => process.Kill(entireProcessTree: true);
     }
 }
+
+public sealed record ChromaDownloadProgress(
+    string AssetName,
+    long BytesDownloaded,
+    long? TotalBytes,
+    bool IsCompleted);
 
 public interface IChromaSidecarProcess
 {

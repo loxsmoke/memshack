@@ -53,7 +53,7 @@ public static class PathUtilities
             return string.Empty;
         }
 
-        var fullPath = Path.GetFullPath(ExpandHome(path));
+        var fullPath = Path.GetFullPath(NormalizeForCurrentPlatform(ExpandHome(path)));
         var trimmedPath = Path.TrimEndingDirectorySeparator(fullPath);
         var leafName = Path.GetFileName(trimmedPath);
         if (!string.IsNullOrWhiteSpace(leafName))
@@ -71,6 +71,18 @@ public static class PathUtilities
         return normalizedRoot.EndsWith(":", StringComparison.Ordinal)
             ? $"{char.ToLowerInvariant(normalizedRoot[0])}_drive"
             : "root";
+    }
+
+    private static string NormalizeForCurrentPlatform(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        return Path.DirectorySeparatorChar == '\\'
+            ? path.Replace('/', '\\')
+            : path.Replace('\\', '/');
     }
 
     public static string ToPosixPath(string path) => path.Replace('\\', '/');

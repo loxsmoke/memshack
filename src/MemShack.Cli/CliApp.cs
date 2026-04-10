@@ -38,14 +38,20 @@ public sealed class CliApp
         .InformationalVersion
         ?.Split('+', 2)[0] ?? "0.0.0";
     private readonly string? _configDirectory;
+    private readonly Func<Action<ChromaDownloadProgress>?, ChromaSidecarManager> _chromaSidecarManagerFactory;
     private readonly string _commandName;
     private readonly IConfigStore _configStore;
 
-    public CliApp(IConfigStore? configStore = null, string? configDirectory = null, string? commandName = null)
+    public CliApp(
+        IConfigStore? configStore = null,
+        string? configDirectory = null,
+        string? commandName = null,
+        Func<Action<ChromaDownloadProgress>?, ChromaSidecarManager>? chromaSidecarManagerFactory = null)
     {
         _configStore = configStore ?? new FileConfigStore();
         _configDirectory = configDirectory;
         _commandName = string.IsNullOrWhiteSpace(commandName) ? DefaultCommandName : commandName;
+        _chromaSidecarManagerFactory = chromaSidecarManagerFactory ?? (downloadProgress => new ChromaSidecarManager(downloadProgress: downloadProgress));
     }
 
     public async Task<int> RunAsync(
@@ -611,7 +617,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var store = CreateVectorStore(palacePath);
+        var store = CreateVectorStore(palacePath, stderr);
         var progressReporter = string.Equals(mode, "projects", StringComparison.Ordinal)
             ? null
             : CreateMiningProgressReporter(stdout);
@@ -884,7 +890,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var service = new MemorySearchService(CreateVectorStore(palacePath), palacePath);
+        var service = new MemorySearchService(CreateVectorStore(palacePath, stderr), palacePath);
         var result = await service.SearchMemoriesAsync(string.Join(' ', queryParts), wing, room, results, cancellationToken);
         if (!string.IsNullOrWhiteSpace(result.Error))
         {
@@ -929,7 +935,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var store = CreateVectorStore(palacePath);
+        var store = CreateVectorStore(palacePath, stderr);
         var collections = await store.ListCollectionsAsync(cancellationToken);
         if (!collections.Contains(CollectionNames.Drawers, StringComparer.Ordinal))
         {
@@ -1019,7 +1025,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var stack = new MemoryStack(CreateVectorStore(palacePath), palacePath, ResolveIdentityPath());
+        var stack = new MemoryStack(CreateVectorStore(palacePath, stderr), palacePath, ResolveIdentityPath());
         var text = await stack.WakeUpAsync(wing, cancellationToken);
         var tokens = text.Length / 4;
 
@@ -1042,7 +1048,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var store = CreateVectorStore(palacePath);
+        var store = CreateVectorStore(palacePath, stderr);
         var collections = await store.ListCollectionsAsync(cancellationToken);
         if (!collections.Contains(CollectionNames.Drawers, StringComparer.Ordinal))
         {
@@ -1166,7 +1172,7 @@ public sealed class CliApp
         }
 
         var palacePath = ResolvePalacePath(globalOptions.PalacePath);
-        var store = CreateVectorStore(palacePath);
+        var store = CreateVectorStore(palacePath, stderr);
         var collections = await store.ListCollectionsAsync(cancellationToken);
         if (!collections.Contains(CollectionNames.Drawers, StringComparer.Ordinal))
         {
@@ -1247,17 +1253,24 @@ public sealed class CliApp
     private static IEnumerable<string> ExpandIncludeIgnored(IEnumerable<string> rawValues) =>
         rawValues.SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    private IVectorStore CreateVectorStore(string palacePath)
+    private IVectorStore CreateVectorStore(string palacePath, TextWriter? progressWriter = null)
     {
         var config = _configStore.Load(_configDirectory) with { PalacePath = palacePath };
         try
         {
-            return VectorStoreFactory.Create(config);
+            var progress = progressWriter is null ? null : CreateChromaDownloadProgressReporter(progressWriter);
+            return VectorStoreFactory.Create(config, _chromaSidecarManagerFactory(progress));
         }
         catch (InvalidOperationException exception)
         {
             throw new CliUsageException(exception.Message);
         }
+    }
+
+    private static Action<ChromaDownloadProgress> CreateChromaDownloadProgressReporter(TextWriter writer)
+    {
+        var reporter = new ChromaDownloadProgressReporter(writer);
+        return reporter.Report;
     }
 
     private static MiningProgressReporter? CreateMiningProgressReporter(TextWriter writer)
@@ -1476,6 +1489,130 @@ public sealed class CliApp
             }
 
             return _stopwatch.Elapsed - _lastRender >= RenderInterval;
+        }
+    }
+
+    private sealed class ChromaDownloadProgressReporter
+    {
+        private const string ClearLine = "\u001b[2K\r";
+        private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(100);
+        private readonly bool _interactive;
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+        private readonly TextWriter _writer;
+        private TimeSpan _lastRender = TimeSpan.MinValue;
+        private bool _started;
+
+        public ChromaDownloadProgressReporter(TextWriter writer)
+        {
+            _writer = writer;
+            _interactive =
+                (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected) ||
+                (ReferenceEquals(writer, Console.Out) && !Console.IsOutputRedirected);
+        }
+
+        public void Report(ChromaDownloadProgress progress)
+        {
+            if (_interactive)
+            {
+                ReportInteractive(progress);
+                return;
+            }
+
+            ReportPlain(progress);
+        }
+
+        private void ReportInteractive(ChromaDownloadProgress progress)
+        {
+            if (!ShouldRender(progress))
+            {
+                return;
+            }
+
+            var message = $"{ClearLine}  Downloading Chroma: {FormatBytes(progress.BytesDownloaded)}";
+            if (progress.TotalBytes is long totalBytes && totalBytes > 0)
+            {
+                var percent = Math.Clamp((int)Math.Round(progress.BytesDownloaded * 100d / totalBytes), 0, 100);
+                message += $" / {FormatBytes(totalBytes)} ({percent}%)";
+            }
+            else
+            {
+                message += " downloaded";
+            }
+
+            if (progress.IsCompleted)
+            {
+                message += " - done";
+            }
+
+            _writer.Write(message);
+            if (progress.IsCompleted)
+            {
+                _writer.WriteLine();
+            }
+
+            _writer.Flush();
+            _lastRender = _stopwatch.Elapsed;
+            _started = true;
+        }
+
+        private void ReportPlain(ChromaDownloadProgress progress)
+        {
+            if (!_started)
+            {
+                _writer.WriteLine($"  Downloading Chroma ({progress.AssetName})...");
+                _writer.Flush();
+                _started = true;
+            }
+
+            if (!progress.IsCompleted)
+            {
+                return;
+            }
+
+            var completionLine = progress.TotalBytes is long totalBytes && totalBytes > 0
+                ? $"  Downloaded Chroma: {FormatBytes(progress.BytesDownloaded)} / {FormatBytes(totalBytes)}"
+                : $"  Downloaded Chroma: {FormatBytes(progress.BytesDownloaded)}";
+            _writer.WriteLine(completionLine);
+            _writer.Flush();
+        }
+
+        private bool ShouldRender(ChromaDownloadProgress progress)
+        {
+            if (progress.IsCompleted)
+            {
+                return true;
+            }
+
+            if (!_started)
+            {
+                return true;
+            }
+
+            return _stopwatch.Elapsed - _lastRender >= RenderInterval;
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            const double kilo = 1024d;
+            const double mega = kilo * 1024d;
+            const double giga = mega * 1024d;
+
+            if (bytes >= giga)
+            {
+                return $"{bytes / giga:F1} GB";
+            }
+
+            if (bytes >= mega)
+            {
+                return $"{bytes / mega:F1} MB";
+            }
+
+            if (bytes >= kilo)
+            {
+                return $"{bytes / kilo:F1} KB";
+            }
+
+            return $"{bytes} B";
         }
     }
 

@@ -113,6 +113,7 @@ public sealed class Palace2ShackParityTests
 
         var scannedFiles = scanner.ScanProject(corpusPath, respectGitignore: true)
             .Select(path => Path.GetRelativePath(corpusPath, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal(

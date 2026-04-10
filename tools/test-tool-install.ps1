@@ -88,7 +88,6 @@ $Version = Get-ProjectVersion -ProjectPath $ProjectPath
 $PackageId = "LoxSmoke.Mems"
 $ToolCommand = "mems"
 $ToolExe = Join-Path $ToolPath "mems.exe"
-$BundledChromaReadme = Join-Path $RepoRoot "src\MemShack.Cli\chroma\win-x64\README.md"
 $PackagePath = Join-Path $PackageOutput "$PackageId.$Version.nupkg"
 
 try {
@@ -148,29 +147,6 @@ JWT authentication protects the backend API.
 
     if ($helpText -notmatch "mems init <dir>") {
         throw "Installed tool help output did not mention the mems command."
-    }
-
-    $bundledChromaPath = [string]::Join("`n", (& $ToolExe __where-chroma 2>&1)).Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw "mems __where-chroma failed"
-    }
-
-    if ($bundledChromaPath -notlike "*\chroma\win-x64\chroma.exe") {
-        throw "Installed tool did not report the expected bundled Chroma path: $bundledChromaPath"
-    }
-
-    $bundledChromaDirectory = Split-Path -Parent $bundledChromaPath
-    if (-not (Test-Path -LiteralPath $bundledChromaDirectory)) {
-        throw "Installed tool Chroma directory was not found: $bundledChromaDirectory"
-    }
-
-    $installedChromaReadme = Join-Path $bundledChromaDirectory "README.md"
-    if (-not (Test-Path -LiteralPath $installedChromaReadme)) {
-        throw "Installed tool did not include the bundled Chroma README: $installedChromaReadme"
-    }
-
-    if (-not (Test-Path -LiteralPath $BundledChromaReadme)) {
-        throw "Expected bundled Chroma README was not found in the source tree: $BundledChromaReadme"
     }
 
     Invoke-Checked -Label "Run mems init" -Action {
