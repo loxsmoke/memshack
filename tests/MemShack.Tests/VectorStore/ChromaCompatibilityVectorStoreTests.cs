@@ -71,4 +71,37 @@ public sealed class ChromaCompatibilityVectorStoreTests
         Assert.Equal("backend", search[0].Room);
         Assert.True(search[0].Similarity > 0);
     }
+
+    [TestMethod]
+    public async Task SourceFileChecksRespectEmbeddingSignatureAndCanDeleteStaleEntries()
+    {
+        using var temp = new TemporaryDirectory();
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        var sourceFile = temp.GetPath("src", "app.py");
+
+        await store.AddDrawerAsync(
+            CollectionNames.Drawers,
+            new DrawerRecord(
+                "drawer_project_backend_1",
+                "JWT authentication tokens are stored with refresh cookies",
+                new DrawerMetadata
+                {
+                    Wing = "project",
+                    Room = "backend",
+                    SourceFile = sourceFile,
+                    ChunkIndex = 0,
+                    AddedBy = "test",
+                    FiledAt = "2026-04-07T12:00:00",
+                    EmbeddingSignature = "legacy-signature",
+                }));
+
+        var hasLegacy = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, "legacy-signature");
+        var hasCurrent = await store.HasSourceFileAsync(CollectionNames.Drawers, sourceFile, EmbeddingSignatures.Current);
+        var deleted = await store.DeleteSourceFileAsync(CollectionNames.Drawers, sourceFile);
+
+        Assert.True(hasLegacy);
+        Assert.False(hasCurrent);
+        Assert.True(deleted);
+        Assert.Empty(await store.GetDrawersAsync(CollectionNames.Drawers));
+    }
 }

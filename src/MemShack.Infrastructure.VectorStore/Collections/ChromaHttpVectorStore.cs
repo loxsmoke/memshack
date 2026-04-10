@@ -3,16 +3,21 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MemShack.Core.Constants;
 using MemShack.Core.Interfaces;
 using MemShack.Core.Models;
+using MemShack.Infrastructure.VectorStore.Embeddings;
 
 namespace MemShack.Infrastructure.VectorStore.Collections;
 
 public sealed class ChromaHttpVectorStore : IVectorStore
 {
     private const int GetBatchSize = 500;
+    private const string TargetDistanceSpace = "l2";
+    private static readonly Lazy<ITextEmbeddingGenerator> DefaultEmbeddingGenerator = new(() => new OnnxMiniLmEmbeddingGenerator());
 
     private readonly string _database;
+    private readonly ITextEmbeddingGenerator _embeddingGenerator;
     private readonly HttpClient _httpClient;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<string, string> _collectionIds = new(StringComparer.Ordinal);
@@ -23,12 +28,14 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         string baseUrl,
         string tenant = "default_tenant",
         string database = "default_database",
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        ITextEmbeddingGenerator? embeddingGenerator = null)
     {
         BaseUrl = baseUrl.TrimEnd('/');
         _tenant = tenant;
         _database = database;
         _httpClient = httpClient ?? new HttpClient();
+        _embeddingGenerator = embeddingGenerator ?? DefaultEmbeddingGenerator.Value;
     }
 
     public string BaseUrl { get; }
@@ -82,6 +89,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         var body = new JsonObject
         {
             ["ids"] = new JsonArray(drawer.Id),
+            ["embeddings"] = new JsonArray(ToEmbeddingJson(_embeddingGenerator.Embed([drawer.Text], cancellationToken)[0])),
             ["documents"] = new JsonArray(drawer.Text),
             ["metadatas"] = new JsonArray(ToMetadataJson(drawer.Metadata)),
         };
@@ -132,7 +140,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
 
         var body = new JsonObject
         {
-            ["query_texts"] = new JsonArray(query),
+            ["query_embeddings"] = new JsonArray(ToEmbeddingJson(_embeddingGenerator.Embed([query], cancellationToken)[0])),
             ["n_results"] = limit,
             ["include"] = new JsonArray("documents", "metadatas", "distances"),
         };
@@ -168,6 +176,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             var distance = index < firstDistances.Count && firstDistances[index].ValueKind == JsonValueKind.Number
                 ? firstDistances[index].GetDouble()
                 : 1d;
+            var vectorSimilarity = Math.Round(1 - distance, 3);
 
             var metadataDictionary = metadata.ValueKind == JsonValueKind.Object
                 ? ParseMetadataDictionary(metadata)
@@ -179,11 +188,15 @@ public sealed class ChromaHttpVectorStore : IVectorStore
                     GetMetadataString(metadata, "wing") ?? string.Empty,
                     GetMetadataString(metadata, "room") ?? string.Empty,
                     GetMetadataString(metadata, "source_file") ?? string.Empty,
-                    Math.Round(1 - distance, 3),
+                    vectorSimilarity,
                     metadataDictionary));
         }
 
-        return hits;
+        return hits
+            .OrderByDescending(hit => hit.Similarity)
+            .ThenBy(hit => hit.SourceFile, StringComparer.Ordinal)
+            .Take(limit)
+            .ToArray();
     }
 
     public async Task<IReadOnlyList<DrawerRecord>> GetDrawersAsync(
@@ -237,6 +250,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
     public async Task<bool> HasSourceFileAsync(
         string collectionName,
         string sourceFile,
+        string? embeddingSignature = null,
         CancellationToken cancellationToken = default)
     {
         var collectionId = await ResolveCollectionIdAsync(collectionName, createIfMissing: false, cancellationToken);
@@ -249,14 +263,45 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         {
             ["limit"] = 1,
             ["include"] = new JsonArray("metadatas"),
-            ["where"] = new JsonObject
-            {
-                ["source_file"] = Path.GetFullPath(sourceFile),
-            },
+            ["where"] = BuildSourceFileWhereFilter(sourceFile, embeddingSignature),
         };
 
         using var document = await SendAsync(HttpMethod.Post, BuildCollectionActionPath(collectionId, "get"), body, cancellationToken);
         return GetIdCount(document.RootElement) > 0;
+    }
+
+    public async Task<bool> DeleteSourceFileAsync(
+        string collectionName,
+        string sourceFile,
+        CancellationToken cancellationToken = default)
+    {
+        var collectionId = await ResolveCollectionIdAsync(collectionName, createIfMissing: false, cancellationToken);
+        if (collectionId is null)
+        {
+            return false;
+        }
+
+        var where = BuildSourceFileWhereFilter(sourceFile);
+        var existingBody = new JsonObject
+        {
+            ["limit"] = 1,
+            ["include"] = new JsonArray("metadatas"),
+            ["where"] = where?.DeepClone(),
+        };
+
+        using var existing = await SendAsync(HttpMethod.Post, BuildCollectionActionPath(collectionId, "get"), existingBody, cancellationToken);
+        if (GetIdCount(existing.RootElement) == 0)
+        {
+            return false;
+        }
+
+        var deleteBody = new JsonObject
+        {
+            ["where"] = where,
+        };
+
+        await SendAsync(HttpMethod.Post, BuildCollectionActionPath(collectionId, "delete"), deleteBody, cancellationToken);
+        return true;
     }
 
     private async Task<string?> ResolveCollectionIdAsync(
@@ -289,23 +334,12 @@ public sealed class ChromaHttpVectorStore : IVectorStore
                 ApiVersion.V2 => await SendAsync(
                     HttpMethod.Post,
                     BuildV2CollectionsPath(),
-                    new JsonObject
-                    {
-                        ["name"] = collectionName,
-                        ["metadata"] = null,
-                        ["configuration"] = null,
-                        ["get_or_create"] = true,
-                    },
+                    BuildCreateCollectionBody(collectionName, version),
                     cancellationToken),
                 _ => await SendAsync(
                     HttpMethod.Post,
                     BuildV1CollectionsPath(),
-                    new JsonObject
-                    {
-                        ["name"] = collectionName,
-                        ["metadata"] = null,
-                        ["get_or_create"] = true,
-                    },
+                    BuildCreateCollectionBody(collectionName, version),
                     cancellationToken),
             };
 
@@ -321,6 +355,30 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         if (collectionId is null)
         {
             throw new InvalidOperationException($"Chroma did not return an id for collection '{collectionName}'.");
+        }
+
+        if (createIfMissing && !CollectionUsesTargetDistanceSpace(document.RootElement))
+        {
+            await DeleteCollectionAsync(collectionId, collectionName, version, cancellationToken);
+
+            using var recreatedDocument = version switch
+            {
+                ApiVersion.V2 => await SendAsync(
+                    HttpMethod.Post,
+                    BuildV2CollectionsPath(),
+                    BuildCreateCollectionBody(collectionName, version),
+                    cancellationToken),
+                _ => await SendAsync(
+                    HttpMethod.Post,
+                    BuildV1CollectionsPath(),
+                    BuildCreateCollectionBody(collectionName, version),
+                    cancellationToken),
+            };
+
+            var recreatedId = GetCollectionId(recreatedDocument.RootElement)
+                ?? throw new InvalidOperationException($"Chroma did not return an id for collection '{collectionName}'.");
+            _collectionIds[collectionName] = recreatedId;
+            return recreatedId;
         }
 
         _collectionIds[collectionName] = collectionId;
@@ -372,6 +430,80 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             ApiVersion.V2 => $"{BuildV2CollectionsPath()}/{encodedId}/{action}",
             _ => $"/api/v1/collections/{encodedId}/{action}",
         };
+    }
+
+    private static JsonObject BuildCreateCollectionBody(string collectionName, ApiVersion version) =>
+        version switch
+        {
+            ApiVersion.V2 => new JsonObject
+            {
+                ["name"] = collectionName,
+                ["metadata"] = null,
+                ["configuration"] = new JsonObject
+                {
+                    ["hnsw"] = new JsonObject
+                    {
+                        ["space"] = TargetDistanceSpace,
+                    },
+                },
+                ["get_or_create"] = true,
+            },
+            _ => new JsonObject
+            {
+                ["name"] = collectionName,
+                ["metadata"] = new JsonObject
+                {
+                    ["hnsw:space"] = TargetDistanceSpace,
+                },
+                ["get_or_create"] = true,
+            },
+        };
+
+    private async Task DeleteCollectionAsync(string collectionId, string collectionName, ApiVersion version, CancellationToken cancellationToken)
+    {
+        _collectionIds.TryRemove(collectionName, out _);
+        var path = version switch
+        {
+            ApiVersion.V2 => $"{BuildV2CollectionsPath()}/{Uri.EscapeDataString(collectionId)}",
+            _ => BuildV1CollectionPath(collectionName),
+        };
+
+        using var response = await SendRawAsync(HttpMethod.Delete, path, null, allowNotFound: true, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    private static bool CollectionUsesTargetDistanceSpace(JsonElement element)
+    {
+        if (TryGetNestedString(element, "configuration_json", "hnsw", "space") is { } configuredSpace)
+        {
+            return string.Equals(configuredSpace, TargetDistanceSpace, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (TryGetNestedString(element, "metadata", "hnsw:space") is { } metadataSpace)
+        {
+            return string.Equals(metadataSpace, TargetDistanceSpace, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static string? TryGetNestedString(JsonElement element, params string[] path)
+    {
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+            {
+                return null;
+            }
+        }
+
+        return current.ValueKind == JsonValueKind.String ? current.GetString() : null;
     }
 
     private async Task<IReadOnlyList<DrawerRecord>> GetByIdsAsync(
@@ -530,6 +662,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             ChunkIndex = GetMetadataInt(element, "chunk_index"),
             AddedBy = GetMetadataString(element, "added_by") ?? string.Empty,
             FiledAt = GetMetadataString(element, "filed_at") ?? string.Empty,
+            EmbeddingSignature = GetMetadataString(element, MetadataKeys.EmbeddingSignature) ?? string.Empty,
             IngestMode = GetMetadataString(element, "ingest_mode") ?? string.Empty,
             ExtractMode = GetMetadataString(element, "extract_mode") ?? string.Empty,
             Hall = GetMetadataString(element, "hall") ?? string.Empty,
@@ -614,6 +747,7 @@ public sealed class ChromaHttpVectorStore : IVectorStore
             ["filed_at"] = metadata.FiledAt,
         };
 
+        AddOptional(json, MetadataKeys.EmbeddingSignature, metadata.EmbeddingSignature);
         AddOptional(json, "ingest_mode", metadata.IngestMode);
         AddOptional(json, "extract_mode", metadata.ExtractMode);
         AddOptional(json, "hall", metadata.Hall);
@@ -629,6 +763,9 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         AddOptional(json, "compressed_tokens", metadata.CompressedTokens);
         return json;
     }
+
+    private static JsonArray ToEmbeddingJson(IReadOnlyList<float> embedding) =>
+        new(embedding.Select(value => JsonValue.Create(value)!).ToArray());
 
     private static JsonNode? BuildWhereFilter(string? wing, string? room)
     {
@@ -650,6 +787,29 @@ public sealed class ChromaHttpVectorStore : IVectorStore
         return !string.IsNullOrWhiteSpace(room)
             ? new JsonObject { ["room"] = room }
             : null;
+    }
+
+    private static JsonNode BuildSourceFileWhereFilter(string sourceFile, string? embeddingSignature = null)
+    {
+        var sourceFileCondition = new JsonObject
+        {
+            [MetadataKeys.SourceFile] = Path.GetFullPath(sourceFile),
+        };
+
+        if (string.IsNullOrWhiteSpace(embeddingSignature))
+        {
+            return sourceFileCondition;
+        }
+
+        return new JsonObject
+        {
+            ["$and"] = new JsonArray(
+                sourceFileCondition,
+                new JsonObject
+                {
+                    [MetadataKeys.EmbeddingSignature] = embeddingSignature,
+                }),
+        };
     }
 
     private static void AddOptional(JsonObject json, string propertyName, string? value)

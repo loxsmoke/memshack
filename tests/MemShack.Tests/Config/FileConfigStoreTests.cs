@@ -21,6 +21,8 @@ public sealed class FileConfigStoreTests
         Assert.True(File.Exists(path));
         var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         Assert.Equal("mempalace_drawers", json["collection_name"]!.GetValue<string>());
+        Assert.Equal("chroma", json["vector_store_backend"]!.GetValue<string>());
+        Assert.True(json["chroma_auto_install"]!.GetValue<bool>());
     }
 
     [TestMethod]
@@ -84,6 +86,9 @@ public sealed class FileConfigStoreTests
         Assert.Equal(MempalaceDefaults.GetDefaultPalacePath(PathUtilities.GetHomeDirectory()), snapshot.PalacePath);
         Assert.Equal(MempalaceDefaults.TopicWings, snapshot.TopicWings);
         Assert.Empty(snapshot.PeopleMap);
+        Assert.Equal("chroma", snapshot.VectorStoreBackend);
+        Assert.True(snapshot.ChromaAutoInstall);
+        Assert.Equal(temp.Root, snapshot.ConfigDirectory);
     }
 
     [TestMethod]
@@ -94,7 +99,10 @@ public sealed class FileConfigStoreTests
             {
               "chroma_url": "http://localhost:8000",
               "chroma_tenant": "tenant_a",
-              "chroma_database": "database_a"
+              "chroma_database": "database_a",
+              "chroma_binary_path": "C:\\tools\\chroma.exe",
+              "vector_store_backend": "compatibility",
+              "chroma_auto_install": "false"
             }
             """);
 
@@ -103,5 +111,21 @@ public sealed class FileConfigStoreTests
         Assert.Equal("http://localhost:8000", snapshot.ChromaUrl);
         Assert.Equal("tenant_a", snapshot.ChromaTenant);
         Assert.Equal("database_a", snapshot.ChromaDatabase);
+        Assert.Equal("C:\\tools\\chroma.exe", snapshot.ChromaBinaryPath);
+        Assert.Equal("compatibility", snapshot.VectorStoreBackend);
+        Assert.False(snapshot.ChromaAutoInstall);
+        Assert.Equal(temp.Root, snapshot.ConfigDirectory);
+    }
+
+    [TestMethod]
+    public void Load_ReadsBooleanChromaAutoInstallFromInitializedConfig()
+    {
+        using var temp = new TemporaryDirectory();
+        _store.Initialize(temp.Root);
+
+        var snapshot = _store.Load(temp.Root);
+
+        Assert.True(snapshot.ChromaAutoInstall);
+        Assert.Equal("chroma", snapshot.VectorStoreBackend);
     }
 }

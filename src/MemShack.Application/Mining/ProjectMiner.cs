@@ -111,9 +111,15 @@ public sealed class ProjectMiner
         CancellationToken cancellationToken)
     {
         var sourceFile = Path.GetFullPath(filePath);
-        if (!dryRun && await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, cancellationToken))
+        if (!dryRun &&
+            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, cancellationToken))
         {
             return new FileProcessingResult(0, "general");
+        }
+
+        if (!dryRun)
+        {
+            await _vectorStore.DeleteSourceFileAsync(collectionName, sourceFile, cancellationToken);
         }
 
         string content;
@@ -157,6 +163,7 @@ public sealed class ProjectMiner
                     ChunkIndex = chunk.ChunkIndex,
                     AddedBy = agent,
                     FiledAt = MiningUtilities.NowIso(),
+                    EmbeddingSignature = EmbeddingSignatures.Current,
                 });
 
             if (await _vectorStore.AddDrawerAsync(collectionName, drawer, cancellationToken))

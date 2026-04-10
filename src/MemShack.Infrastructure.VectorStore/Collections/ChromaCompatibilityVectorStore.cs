@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MemShack.Core.Constants;
 using MemShack.Core.Interfaces;
 using MemShack.Core.Models;
 
@@ -150,11 +151,42 @@ public sealed class ChromaCompatibilityVectorStore : IVectorStore
     public async Task<bool> HasSourceFileAsync(
         string collectionName,
         string sourceFile,
+        string? embeddingSignature = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedSourceFile = Path.GetFullPath(sourceFile);
         var drawers = await GetDrawersAsync(collectionName, cancellationToken: cancellationToken);
-        return drawers.Any(drawer => string.Equals(Path.GetFullPath(drawer.Metadata.SourceFile), normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
+        return drawers.Any(drawer =>
+            string.Equals(Path.GetFullPath(drawer.Metadata.SourceFile), normalizedSourceFile, StringComparison.OrdinalIgnoreCase) &&
+            (embeddingSignature is null || string.Equals(drawer.Metadata.EmbeddingSignature, embeddingSignature, StringComparison.Ordinal)));
+    }
+
+    public async Task<bool> DeleteSourceFileAsync(
+        string collectionName,
+        string sourceFile,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSourceFile = Path.GetFullPath(sourceFile);
+        await _mutex.WaitAsync(cancellationToken);
+        try
+        {
+            var collection = await LoadCollectionAsync(collectionName, cancellationToken);
+            var removed = collection.Drawers.RemoveAll(
+                drawer => string.Equals(
+                    Path.GetFullPath(drawer.Metadata.SourceFile),
+                    normalizedSourceFile,
+                    StringComparison.OrdinalIgnoreCase)) > 0;
+            if (removed)
+            {
+                await SaveCollectionAsync(collection, cancellationToken);
+            }
+
+            return removed;
+        }
+        finally
+        {
+            _mutex.Release();
+        }
     }
 
     private async Task<CollectionDocument> LoadCollectionAsync(string collectionName, CancellationToken cancellationToken)
@@ -207,6 +239,7 @@ public sealed class ChromaCompatibilityVectorStore : IVectorStore
             ["chunk_index"] = metadata.ChunkIndex,
             ["added_by"] = metadata.AddedBy,
             ["filed_at"] = metadata.FiledAt,
+            [MetadataKeys.EmbeddingSignature] = metadata.EmbeddingSignature,
             ["ingest_mode"] = metadata.IngestMode,
             ["extract_mode"] = metadata.ExtractMode,
             ["hall"] = metadata.Hall,

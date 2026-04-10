@@ -80,6 +80,7 @@ $HomeRoot = Join-Path $SmokeRoot "home"
 $ProjectRoot = Join-Path $SmokeRoot "project"
 $PalacePath = Join-Path $SmokeRoot "palace"
 $LocalRoot = Join-Path $SmokeRoot "local-manifest"
+$ConfigRoot = Join-Path $HomeRoot ".mempalace"
 $DotnetHome = Join-Path $RepoRoot "src\.dotnet"
 $NuGetPackages = Join-Path $RepoRoot "src\.nuget\packages"
 $ProjectPath = Join-Path $RepoRoot "src\MemShack.Cli\MemShack.Cli.csproj"
@@ -87,6 +88,7 @@ $Version = Get-ProjectVersion -ProjectPath $ProjectPath
 $PackageId = "LoxSmoke.Mems"
 $ToolCommand = "mems"
 $ToolExe = Join-Path $ToolPath "mems.exe"
+$BundledChromaReadme = Join-Path $RepoRoot "src\MemShack.Cli\chroma\win-x64\README.md"
 $PackagePath = Join-Path $PackageOutput "$PackageId.$Version.nupkg"
 
 try {
@@ -95,6 +97,7 @@ try {
     New-Item -ItemType Directory -Force -Path $SmokeRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $ToolPath | Out-Null
     New-Item -ItemType Directory -Force -Path $HomeRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $ConfigRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $ProjectRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $LocalRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $DotnetHome | Out-Null
@@ -147,9 +150,38 @@ JWT authentication protects the backend API.
         throw "Installed tool help output did not mention the mems command."
     }
 
+    $bundledChromaPath = [string]::Join("`n", (& $ToolExe __where-chroma 2>&1)).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "mems __where-chroma failed"
+    }
+
+    if ($bundledChromaPath -notlike "*\chroma\win-x64\chroma.exe") {
+        throw "Installed tool did not report the expected bundled Chroma path: $bundledChromaPath"
+    }
+
+    $bundledChromaDirectory = Split-Path -Parent $bundledChromaPath
+    if (-not (Test-Path -LiteralPath $bundledChromaDirectory)) {
+        throw "Installed tool Chroma directory was not found: $bundledChromaDirectory"
+    }
+
+    $installedChromaReadme = Join-Path $bundledChromaDirectory "README.md"
+    if (-not (Test-Path -LiteralPath $installedChromaReadme)) {
+        throw "Installed tool did not include the bundled Chroma README: $installedChromaReadme"
+    }
+
+    if (-not (Test-Path -LiteralPath $BundledChromaReadme)) {
+        throw "Expected bundled Chroma README was not found in the source tree: $BundledChromaReadme"
+    }
+
     Invoke-Checked -Label "Run mems init" -Action {
         & $ToolExe init $ProjectRoot --yes
     }
+
+    Set-Content -Path (Join-Path $ConfigRoot "config.json") -Value @"
+{
+  "vector_store_backend": "compatibility"
+}
+"@
 
     Invoke-Checked -Label "Run mems mine" -Action {
         & $ToolExe --palace $PalacePath mine $ProjectRoot

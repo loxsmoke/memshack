@@ -8,6 +8,7 @@ public static class MetadataKeys
     public const string ChunkIndex = "chunk_index";
     public const string AddedBy = "added_by";
     public const string FiledAt = "filed_at";
+    public const string EmbeddingSignature = "embedding_signature";
     public const string IngestMode = "ingest_mode";
     public const string ExtractMode = "extract_mode";
     public const string Hall = "hall";

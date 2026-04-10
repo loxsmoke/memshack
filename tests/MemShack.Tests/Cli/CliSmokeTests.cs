@@ -23,6 +23,7 @@ public sealed class CliSmokeTests
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
         Assert.Contains("mems mine <dir>", stdout.ToString());
+        Assert.Contains("mems shutdowndb", stdout.ToString());
         Assert.Contains("mems wake-up", stdout.ToString());
     }
 
@@ -44,6 +45,103 @@ public sealed class CliSmokeTests
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
         Assert.Equal(string.Empty, stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task InternalWhereChroma_PrintsBundledCandidatePath()
+    {
+        using var temp = new TemporaryDirectory();
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["__where-chroma"], stdout, stderr);
+        var output = stdout.ToString().Trim();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.True(
+            output == "unsupported-platform" ||
+            output.EndsWith($"{Path.DirectorySeparatorChar}chroma{Path.DirectorySeparatorChar}win-x64{Path.DirectorySeparatorChar}chroma.exe", StringComparison.Ordinal) ||
+            output.EndsWith($"{Path.DirectorySeparatorChar}chroma{Path.DirectorySeparatorChar}linux-x64{Path.DirectorySeparatorChar}chroma", StringComparison.Ordinal) ||
+            output.EndsWith($"{Path.DirectorySeparatorChar}chroma{Path.DirectorySeparatorChar}osx-arm64{Path.DirectorySeparatorChar}chroma", StringComparison.Ordinal),
+            $"Unexpected bundled Chroma candidate path: {output}");
+    }
+
+    [TestMethod]
+    public async Task DefaultMineBackend_RequiresChromaWhenCompatibilityIsNotConfigured()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var palacePath = temp.GetPath("palace");
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "chroma_auto_install": false
+            }
+            """);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "backend"));
+        File.WriteAllText(Path.Combine(projectRoot, ConfigFileNames.MempalaceYaml), """
+            wing: project
+            rooms:
+              - name: backend
+                description: Backend code
+            """);
+        File.WriteAllText(Path.Combine(projectRoot, "backend", "auth.py"), "print('hello')\n");
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "mine", projectRoot], stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("managed Chroma database", stderr.ToString());
+        Assert.Equal(string.Empty, stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task ShutdownDb_WithoutRecordedSidecar_PrintsFriendlyMessage()
+    {
+        using var temp = new TemporaryDirectory();
+        var palacePath = temp.GetPath("palace");
+        Directory.CreateDirectory(palacePath);
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "shutdowndb"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack ShutdownDb", stdout.ToString());
+        Assert.Contains("No managed Chroma sidecar is recorded for this palace.", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task ShutdownDb_WithExplicitChromaUrl_DoesNotAttemptManagedSidecarShutdown()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var palacePath = temp.GetPath("palace");
+        Directory.CreateDirectory(palacePath);
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "chroma_url": "http://example.test:8000"
+            }
+            """);
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "shutdowndb"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("Configured to use an external Chroma server.", stdout.ToString());
+        Assert.Contains("http://example.test:8000", stdout.ToString());
     }
 
     [TestMethod]
@@ -184,6 +282,11 @@ public sealed class CliSmokeTests
         var palacePath = temp.GetPath("palace");
         var projectRoot = temp.GetPath("project");
         Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "vector_store_backend": "compatibility"
+            }
+            """);
         Directory.CreateDirectory(Path.Combine(projectRoot, "backend"));
         File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.IdentityText), "I am Atlas, a helpful assistant.");
         File.WriteAllText(Path.Combine(projectRoot, ConfigFileNames.MempalaceYaml), """
@@ -223,6 +326,7 @@ public sealed class CliSmokeTests
         Assert.Contains("By room:", mineOut.ToString());
         Assert.Contains("Next: mems search \"what you're looking for\"", mineOut.ToString());
         Assert.Contains("Drawers filed", mineOut.ToString());
+        Assert.Contains("Store:   legacy compatibility JSON", mineOut.ToString());
         Assert.Contains("Results for: \"JWT authentication\"", searchOut.ToString());
         Assert.Contains("Wake-up text", wakeOut.ToString());
         Assert.Contains("I am Atlas", wakeOut.ToString());
@@ -240,6 +344,11 @@ public sealed class CliSmokeTests
         var convoRoot = temp.GetPath("convos");
         var splitRoot = temp.GetPath("split");
         Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "vector_store_backend": "compatibility"
+            }
+            """);
         Directory.CreateDirectory(convoRoot);
         Directory.CreateDirectory(splitRoot);
         File.WriteAllText(Path.Combine(convoRoot, "chat.txt"), """
@@ -296,6 +405,7 @@ public sealed class CliSmokeTests
         Assert.Equal(0, compressDryRunCode);
         Assert.Equal(0, compressCode);
         Assert.Contains("Mode: convos", mineOut.ToString());
+        Assert.Contains("Store: legacy compatibility JSON", mineOut.ToString());
         Assert.Contains(Path.Combine(palacePath, "collections", $"{CollectionNames.Drawers}.json"), mineOut.ToString());
         Assert.Contains("would create 2 files", splitOut.ToString());
         Assert.Contains("dry run", compressDryRunOut.ToString(), StringComparison.OrdinalIgnoreCase);

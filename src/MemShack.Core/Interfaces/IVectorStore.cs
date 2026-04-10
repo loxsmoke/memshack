@@ -35,5 +35,11 @@ public interface IVectorStore
     Task<bool> HasSourceFileAsync(
         string collectionName,
         string sourceFile,
+        string? embeddingSignature = null,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> DeleteSourceFileAsync(
+        string collectionName,
+        string sourceFile,
         CancellationToken cancellationToken = default);
 }

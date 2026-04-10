@@ -83,6 +83,7 @@ HOME_ROOT="$SMOKE_ROOT/home"
 PROJECT_ROOT="$SMOKE_ROOT/project"
 PALACE_PATH="$SMOKE_ROOT/palace"
 LOCAL_ROOT="$SMOKE_ROOT/local-manifest"
+CONFIG_ROOT="$HOME_ROOT/.mempalace"
 DOTNET_HOME="$REPO_ROOT/src/.dotnet"
 NUGET_PACKAGES="$REPO_ROOT/src/.nuget/packages"
 PROJECT_PATH="$REPO_ROOT/src/MemShack.Cli/MemShack.Cli.csproj"
@@ -98,6 +99,7 @@ mkdir -p \
     "$SMOKE_ROOT" \
     "$TOOL_PATH" \
     "$HOME_ROOT" \
+    "$CONFIG_ROOT" \
     "$PROJECT_ROOT/backend" \
     "$LOCAL_ROOT" \
     "$DOTNET_HOME" \
@@ -139,6 +141,12 @@ fi
 
 invoke_checked "Run mems init" \
     "$TOOL_BIN" init "$PROJECT_ROOT" --yes
+
+cat > "$CONFIG_ROOT/config.json" <<'EOF'
+{
+  "vector_store_backend": "compatibility"
+}
+EOF
 
 invoke_checked "Run mems mine" \
     "$TOOL_BIN" --palace "$PALACE_PATH" mine "$PROJECT_ROOT"

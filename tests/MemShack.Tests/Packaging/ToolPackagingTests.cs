@@ -43,6 +43,9 @@ public sealed class ToolPackagingTests
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "src", "MemShack.Cli", "README.md")),
             "The packaged CLI README.md file should exist under src/MemShack.Cli.");
         Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "src", "MemShack.Cli", "chroma", "win-x64", "README.md")),
+            "The bundled Chroma sidecar placeholder docs should exist under src/MemShack.Cli/chroma/win-x64.");
+        Assert.True(
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "docs", "tool-installation.md")),
             "The contributor packaging guide should exist at docs/tool-installation.md.");
         Assert.True(
@@ -51,6 +54,22 @@ public sealed class ToolPackagingTests
         Assert.True(
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "tools", "test-tool-install.sh")),
             "The bash packaging smoke test script should exist at tools/test-tool-install.sh.");
+    }
+
+    [TestMethod]
+    public void CliProject_PacksBundledChromaSidecarAssetsIntoToolLayout()
+    {
+        var projectPath = Path.Combine(FixturePaths.RepoRootPath, "src", "MemShack.Cli", "MemShack.Cli.csproj");
+        var document = XDocument.Load(projectPath);
+        var chromaItem = document.Root?
+            .Elements("ItemGroup")
+            .Elements("None")
+            .FirstOrDefault(element => string.Equals((string?)element.Attribute("Include"), @"chroma\**\*", StringComparison.Ordinal));
+
+        var item = Assert.NotNull(chromaItem, "MemShack.Cli.csproj should include bundled Chroma sidecar assets.");
+        Assert.Equal("true", (string?)item.Attribute("Pack"));
+        Assert.Equal("tools/net10.0/any/chroma/%(RecursiveDir)%(Filename)%(Extension)", (string?)item.Attribute("PackagePath"));
+        Assert.Equal("PreserveNewest", (string?)item.Attribute("CopyToOutputDirectory"));
     }
 
     private static string? GetProperty(XDocument document, string propertyName) =>

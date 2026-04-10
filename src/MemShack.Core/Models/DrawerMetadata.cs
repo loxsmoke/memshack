@@ -14,6 +14,8 @@ public sealed record DrawerMetadata
 
     public string FiledAt { get; init; } = string.Empty;
 
+    public string? EmbeddingSignature { get; init; }
+
     public string? IngestMode { get; init; }
 
     public string? ExtractMode { get; init; }

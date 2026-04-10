@@ -45,6 +45,23 @@ public sealed class FileConfigStore : IConfigStore
             ?? fileConfig?["chroma_database"]?.GetValue<string>()
             ?? "default_database";
 
+        var chromaBinaryPath = Environment.GetEnvironmentVariable("MEMPALACE_CHROMA_BINARY_PATH")
+            ?? Environment.GetEnvironmentVariable("MEMPAL_CHROMA_BINARY_PATH")
+            ?? Environment.GetEnvironmentVariable("MEMSHACK_CHROMA_BINARY_PATH")
+            ?? fileConfig?["chroma_binary_path"]?.GetValue<string>();
+
+        var chromaAutoInstall = ReadBoolean(Environment.GetEnvironmentVariable("MEMPALACE_CHROMA_AUTO_INSTALL"))
+            ?? ReadBoolean(Environment.GetEnvironmentVariable("MEMPAL_CHROMA_AUTO_INSTALL"))
+            ?? ReadBoolean(Environment.GetEnvironmentVariable("MEMSHACK_CHROMA_AUTO_INSTALL"))
+            ?? ReadBoolean(fileConfig?["chroma_auto_install"])
+            ?? true;
+
+        var vectorStoreBackend = Environment.GetEnvironmentVariable("MEMPALACE_VECTOR_STORE_BACKEND")
+            ?? Environment.GetEnvironmentVariable("MEMPAL_VECTOR_STORE_BACKEND")
+            ?? Environment.GetEnvironmentVariable("MEMSHACK_VECTOR_STORE_BACKEND")
+            ?? fileConfig?["vector_store_backend"]?.GetValue<string>()
+            ?? "chroma";
+
         var collectionName = fileConfig?["collection_name"]?.GetValue<string>() ?? CollectionNames.Drawers;
         var peopleMap = ReadStringDictionary(peopleMapFile) ?? ReadStringDictionary(fileConfig?["people_map"]) ?? new Dictionary<string, string>(StringComparer.Ordinal);
         var topicWings = ReadStringList(fileConfig?["topic_wings"]) ?? MempalaceDefaults.TopicWings.ToArray();
@@ -56,9 +73,13 @@ public sealed class FileConfigStore : IConfigStore
             peopleMap,
             topicWings,
             hallKeywords,
+            vectorStoreBackend,
             chromaUrl,
             chromaTenant,
-            chromaDatabase);
+            chromaDatabase,
+            chromaBinaryPath,
+            chromaAutoInstall,
+            resolvedConfigDirectory);
     }
 
     public string Initialize(string? configDirectory = null)
@@ -74,6 +95,8 @@ public sealed class FileConfigStore : IConfigStore
             {
                 ["palace_path"] = MempalaceDefaults.GetDefaultPalacePath(homeDirectory),
                 ["collection_name"] = CollectionNames.Drawers,
+                ["vector_store_backend"] = "chroma",
+                ["chroma_auto_install"] = true,
                 ["topic_wings"] = new JsonArray(MempalaceDefaults.TopicWings.Select(value => JsonValue.Create(value)!).ToArray()),
                 ["hall_keywords"] = ToJsonObject(MempalaceDefaults.HallKeywords),
             };
@@ -196,6 +219,45 @@ public sealed class FileConfigStore : IConfigStore
             item => item.Key,
             item => (IReadOnlyList<string>)item.Value.ToArray(),
             StringComparer.Ordinal);
+    }
+
+    private static bool? ReadBoolean(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "1" or "true" or "yes" or "on" => true,
+            "0" or "false" or "no" or "off" => false,
+            _ => null,
+        };
+    }
+
+    private static bool? ReadBoolean(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue jsonValue)
+        {
+            try
+            {
+                return jsonValue.GetValue<bool>();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (FormatException)
+            {
+            }
+        }
+
+        return ReadBoolean(node.ToString());
     }
 
     private static JsonObject ToJsonObject(IReadOnlyDictionary<string, IReadOnlyList<string>> values)

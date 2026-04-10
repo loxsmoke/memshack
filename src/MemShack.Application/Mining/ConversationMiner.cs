@@ -194,9 +194,15 @@ public sealed class ConversationMiner
         CancellationToken cancellationToken)
     {
         var sourceFile = Path.GetFullPath(filePath);
-        if (!dryRun && await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, cancellationToken))
+        if (!dryRun &&
+            await _vectorStore.HasSourceFileAsync(collectionName, sourceFile, EmbeddingSignatures.Current, cancellationToken))
         {
             return new ConversationProcessingResult(0, new Dictionary<string, int>(StringComparer.Ordinal));
+        }
+
+        if (!dryRun)
+        {
+            await _vectorStore.DeleteSourceFileAsync(collectionName, sourceFile, cancellationToken);
         }
 
         string normalizedContent;
@@ -247,6 +253,7 @@ public sealed class ConversationMiner
                         ChunkIndex = memory.ChunkIndex,
                         AddedBy = agent,
                         FiledAt = MiningUtilities.NowIso(),
+                        EmbeddingSignature = EmbeddingSignatures.Current,
                         IngestMode = "convos",
                         ExtractMode = extractMode,
                     });
@@ -283,6 +290,7 @@ public sealed class ConversationMiner
                     ChunkIndex = chunk.ChunkIndex,
                     AddedBy = agent,
                     FiledAt = MiningUtilities.NowIso(),
+                    EmbeddingSignature = EmbeddingSignatures.Current,
                     IngestMode = "convos",
                     ExtractMode = extractMode,
                 });

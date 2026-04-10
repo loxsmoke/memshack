@@ -2,6 +2,7 @@ using MemShack.Application.Chunking;
 using MemShack.Application.Mining;
 using MemShack.Application.Scanning;
 using MemShack.Core.Constants;
+using MemShack.Core.Models;
 using MemShack.Infrastructure.Config.Projects;
 using MemShack.Infrastructure.VectorStore.Collections;
 using MemShack.Tests.Utilities;
@@ -82,6 +83,55 @@ public sealed class ProjectMinerIntegrationTests
         Assert.Equal(firstRun.DrawersFiled, drawers.Count);
         Assert.Equal(0, secondRun.DrawersFiled);
         Assert.True(secondRun.FilesSkipped > 0);
+    }
+
+    [TestMethod]
+    public async Task ReindexesSourceFileWhenEmbeddingSignatureChanges()
+    {
+        using var temp = new TemporaryDirectory();
+        var projectRoot = temp.GetPath("project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "mempalace.yaml"), """
+            wing: docs_project
+            rooms:
+              - name: documentation
+                description: Docs
+              - name: general
+                description: General
+            """);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        var sourceFile = Path.Combine(projectRoot, "docs", "guide.md");
+        File.WriteAllText(sourceFile, string.Join("\n\n", Enumerable.Repeat("Guide paragraph with documentation details.", 25)));
+
+        var store = new ChromaCompatibilityVectorStore(temp.GetPath("palace"));
+        await store.AddDrawerAsync(
+            CollectionNames.Drawers,
+            new DrawerRecord(
+                "drawer_docs_project_documentation_old",
+                "legacy text",
+                new DrawerMetadata
+                {
+                    Wing = "docs_project",
+                    Room = "documentation",
+                    SourceFile = sourceFile,
+                    ChunkIndex = 0,
+                    AddedBy = "legacy",
+                    FiledAt = "2026-04-01T00:00:00",
+                    EmbeddingSignature = "legacy-signature",
+                }));
+
+        var miner = new ProjectMiner(
+            new YamlProjectPalaceConfigLoader(),
+            new ProjectScanner(),
+            new TextChunker(),
+            store);
+
+        var result = await miner.MineAsync(projectRoot);
+        var drawers = await store.GetDrawersAsync(CollectionNames.Drawers);
+
+        Assert.True(result.DrawersFiled > 0);
+        Assert.DoesNotContain(drawers, drawer => drawer.Id == "drawer_docs_project_documentation_old");
+        Assert.All(drawers, drawer => Assert.Equal(EmbeddingSignatures.Current, drawer.Metadata.EmbeddingSignature));
     }
 
     [TestMethod]

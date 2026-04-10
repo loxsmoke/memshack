@@ -76,12 +76,14 @@ public sealed class CliApp
 
             return command switch
             {
+                "__where-chroma" => await RunWhereChromaAsync(stdout),
                 "init" => await RunInitAsync(commandArgs, stdin, stdout, stderr, cancellationToken),
                 "mine" => await RunMineAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "split" => await RunSplitAsync(commandArgs, stdout, stderr, cancellationToken),
                 "search" => await RunSearchAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "compress" => await RunCompressAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "wake-up" => await RunWakeUpAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
+                "shutdowndb" => await RunShutdownDbAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "status" => await RunStatusAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "repair" => await RunRepairAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 _ => await RunUnknownCommandAsync(command, stdout, stderr),
@@ -647,6 +649,7 @@ public sealed class CliApp
                 noGitignore,
                 includeIgnored,
                 palacePath,
+                store,
                 result,
                 stdout);
             return 0;
@@ -655,6 +658,7 @@ public sealed class CliApp
         await stdout.WriteLineAsync($"\n  MemShack Mine");
         await stdout.WriteLineAsync($"  Mode: {mode}");
         await stdout.WriteLineAsync($"  Palace: {palacePath}");
+        await stdout.WriteLineAsync($"  Store: {DescribeVectorStore(store)}");
         if (store is ChromaCompatibilityVectorStore compatibilityStore)
         {
             var collectionPath = Path.Combine(compatibilityStore.CollectionsPath, $"{CollectionNames.Drawers}.json");
@@ -687,6 +691,7 @@ public sealed class CliApp
         bool noGitignore,
         IReadOnlyList<string> includeIgnored,
         string palacePath,
+        IVectorStore store,
         MiningRunResult result,
         TextWriter stdout)
     {
@@ -700,6 +705,7 @@ public sealed class CliApp
         await stdout.WriteLineAsync($"  Rooms:   {string.Join(", ", config.Rooms.Select(room => room.Name))}");
         await stdout.WriteLineAsync($"  Files:   {result.FilesDiscovered}");
         await stdout.WriteLineAsync($"  Palace:  {palacePath}");
+        await stdout.WriteLineAsync($"  Store:   {DescribeVectorStore(store)}");
         if (result.DryRun)
         {
             await stdout.WriteLineAsync("  DRY RUN - nothing will be filed");
@@ -1052,6 +1058,7 @@ public sealed class CliApp
 
         await stdout.WriteLineAsync($"\n{new string('=', 55)}");
         await stdout.WriteLineAsync($"  MemShack Status - {drawers.Count} drawers");
+        await stdout.WriteLineAsync($"  Store: {DescribeVectorStore(store)}");
         await stdout.WriteLineAsync($"{new string('=', 55)}\n");
 
         foreach (var wing in grouped)
@@ -1065,6 +1072,83 @@ public sealed class CliApp
             await stdout.WriteLineAsync(string.Empty);
         }
 
+        await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+        return 0;
+    }
+
+    private async Task<int> RunShutdownDbAsync(
+        IReadOnlyList<string> args,
+        GlobalOptions globalOptions,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        if (args.Count > 0)
+        {
+            throw new CliUsageException($"Usage: {_commandName} shutdowndb");
+        }
+
+        var palacePath = ResolvePalacePath(globalOptions.PalacePath);
+        var config = _configStore.Load(_configDirectory) with { PalacePath = palacePath };
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}");
+        await stdout.WriteLineAsync("  MemShack ShutdownDb");
+        await stdout.WriteLineAsync($"{new string('=', 55)}");
+        await stdout.WriteLineAsync($"  Palace: {palacePath}");
+
+        if (!string.IsNullOrWhiteSpace(config.ChromaUrl))
+        {
+            await stdout.WriteLineAsync($"  Chroma URL: {config.ChromaUrl}");
+            await stdout.WriteLineAsync("  Configured to use an external Chroma server. 'shutdowndb' only stops managed local Chroma sidecars.");
+            await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+            return 0;
+        }
+
+        ChromaSidecarShutdownResult result;
+        try
+        {
+            result = new ChromaSidecarManager().Shutdown(config);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new CliUsageException(exception.Message);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.BaseUrl))
+        {
+            await stdout.WriteLineAsync($"  Chroma URL: {result.BaseUrl}");
+        }
+
+        if (result.ProcessId is int processId && processId > 0)
+        {
+            await stdout.WriteLineAsync($"  Process: {processId}");
+        }
+
+        if (!result.HadRecordedSidecar)
+        {
+            if (result.UsedProcessDiscovery && result.MatchingProcessCount > 1)
+            {
+                await stdout.WriteLineAsync($"  Found {result.MatchingProcessCount} managed Chroma processes for this installation and could not safely choose which one belongs to this palace.");
+                await stdout.WriteLineAsync("  Stop them manually or rerun after narrowing the active palaces.");
+                await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+                return 1;
+            }
+
+            if (result.UsedProcessDiscovery && result.WasRunning)
+            {
+                await stdout.WriteLineAsync("  Managed Chroma sidecar stopped after recovering it from the installed binary path.");
+                await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+                return 0;
+            }
+
+            await stdout.WriteLineAsync("  No managed Chroma sidecar is recorded for this palace.");
+            await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+            return 0;
+        }
+
+        await stdout.WriteLineAsync(
+            result.WasRunning
+                ? "  Managed Chroma sidecar stopped."
+                : "  Managed Chroma sidecar was already stopped. Cleared the recorded sidecar state.");
         await stdout.WriteLineAsync($"{new string('=', 55)}\n");
         return 0;
     }
@@ -1103,6 +1187,7 @@ public sealed class CliApp
 
         await stdout.WriteLineAsync($"\n  MemShack Repair");
         await stdout.WriteLineAsync($"  Palace: {palacePath}");
+        await stdout.WriteLineAsync($"  Store: {DescribeVectorStore(store)}");
         if (store is ChromaCompatibilityVectorStore)
         {
             await stdout.WriteLineAsync($"  Backup: {backupPath}");
@@ -1141,6 +1226,18 @@ public sealed class CliApp
         return 1;
     }
 
+    private static async Task<int> RunWhereChromaAsync(TextWriter stdout)
+    {
+        var candidate = ChromaSidecarManager.GetBundledBinaryCandidatePath(AppContext.BaseDirectory);
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return await WriteAndReturnAsync(stdout, "unsupported-platform", 0);
+        }
+
+        await stdout.WriteLineAsync(candidate);
+        return 0;
+    }
+
     private static async Task<int> WriteAndReturnAsync(TextWriter writer, string text, int code)
     {
         await writer.WriteLineAsync(text);
@@ -1153,7 +1250,14 @@ public sealed class CliApp
     private IVectorStore CreateVectorStore(string palacePath)
     {
         var config = _configStore.Load(_configDirectory) with { PalacePath = palacePath };
-        return VectorStoreFactory.Create(config);
+        try
+        {
+            return VectorStoreFactory.Create(config);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new CliUsageException(exception.Message);
+        }
     }
 
     private static MiningProgressReporter? CreateMiningProgressReporter(TextWriter writer)
@@ -1235,6 +1339,26 @@ public sealed class CliApp
 
     private static string NormalizeWingName(string name) =>
         name.ToLowerInvariant().Replace(" ", "_", StringComparison.Ordinal).Replace("-", "_", StringComparison.Ordinal);
+
+    private static string DescribeVectorStore(IVectorStore store) =>
+        store switch
+        {
+            ChromaHttpVectorStore chromaStore when IsLoopbackAddress(chromaStore.BaseUrl) => "managed local Chroma",
+            ChromaHttpVectorStore chromaStore => $"external Chroma ({chromaStore.BaseUrl})",
+            ChromaCompatibilityVectorStore => "legacy compatibility JSON",
+            _ => store.GetType().Name,
+        };
+
+    private static bool IsLoopbackAddress(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return uri.Host.Equals("127.0.0.1", StringComparison.Ordinal) ||
+               uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static (GlobalOptions GlobalOptions, List<string> RemainingArgs) ParseGlobalOptions(IReadOnlyList<string> args)
     {
@@ -1427,6 +1551,7 @@ Commands:
   {{_commandName}} search <query> [--wing <name>] [--room <name>] [--results <n>]
   {{_commandName}} compress [--wing <name>] [--dry-run] [--config <path>]
   {{_commandName}} wake-up [--wing <name>]
+  {{_commandName}} shutdowndb
   {{_commandName}} repair
   {{_commandName}} status
 
