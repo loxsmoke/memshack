@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MemShack.Cli;
 using MemShack.Core.Constants;
+using MemShack.Infrastructure.VectorStore.Collections;
 using MemShack.Tests.Utilities;
 
 namespace MemShack.Tests.Cli;
@@ -23,6 +24,8 @@ public sealed class CliSmokeTests
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
         Assert.Contains("mems mine <dir>", stdout.ToString());
+        Assert.Contains("mems migrate [--dry-run]", stdout.ToString());
+        Assert.Contains("mems dedup [--dry-run]", stdout.ToString());
         Assert.Contains("mems hook", stdout.ToString());
         Assert.Contains("mems instructions", stdout.ToString());
         Assert.Contains("mems mcp", stdout.ToString());
@@ -47,6 +50,8 @@ public sealed class CliSmokeTests
         AssertBanner(stdout.ToString());
         Assert.Contains("C# port of MemPalace - The highest-scoring AI memory system ever benchmarked", stdout.ToString());
         Assert.Contains("mems init <dir>", stdout.ToString());
+        Assert.Contains("mems migrate [--dry-run]", stdout.ToString());
+        Assert.Contains("mems dedup [--dry-run]", stdout.ToString());
         Assert.Contains("mems hook", stdout.ToString());
         Assert.Contains("mems instructions", stdout.ToString());
         Assert.Contains("mems mcp", stdout.ToString());
@@ -175,6 +180,8 @@ public sealed class CliSmokeTests
         Assert.Contains("MemShack MCP quick setup:", stdout.ToString());
         Assert.Contains("claude mcp add mempalace -- dotnet run --project", stdout.ToString());
         Assert.Contains("--palace", stdout.ToString());
+        Assert.Contains("OpenClaw / ClawHub skill asset:", stdout.ToString());
+        Assert.Contains("SKILL.md", stdout.ToString());
     }
 
     [TestMethod]
@@ -311,6 +318,114 @@ public sealed class CliSmokeTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout.ToString());
         Assert.Contains("Usage: mems search <query> [--wing NAME] [--room NAME]", stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task HiddenCountHumanMessages_ParsesClaudeAndCodexFormats()
+    {
+        using var temp = new TemporaryDirectory();
+        var transcriptPath = temp.WriteFile(
+            "transcript.jsonl",
+            string.Join(
+                Environment.NewLine,
+                [
+                    """{"message":{"role":"user","content":"hello"}}""",
+                    """{"type":"event_msg","payload":{"type":"user_message","message":"codex hello"}}""",
+                    """{"message":{"role":"user","content":"<command-message>skip</command-message>"}}""",
+                ]));
+        var app = new CliApp(configDirectory: temp.GetPath("config"));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["__count-human-messages", transcriptPath], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("2", stdout.ToString().Trim());
+        Assert.Equal(string.Empty, stderr.ToString());
+    }
+
+    [TestMethod]
+    public async Task Dedup_DryRun_PrintsSimilarityThresholdGuidance()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var palacePath = temp.GetPath("palace");
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "vector_store_backend": "compatibility"
+            }
+            """);
+
+        var store = new ChromaCompatibilityVectorStore(palacePath);
+        await store.EnsureCollectionAsync(CollectionNames.Drawers);
+        for (var index = 0; index < 5; index++)
+        {
+            await store.AddDrawerAsync(
+                CollectionNames.Drawers,
+                new MemShack.Core.Models.DrawerRecord(
+                    $"drawer-{index}",
+                    "JWT authentication refresh tokens protect the backend API and rotate sessions safely.",
+                    new MemShack.Core.Models.DrawerMetadata
+                    {
+                        Wing = "project",
+                        Room = "src",
+                        SourceFile = "/repo/src/auth.py",
+                        ChunkIndex = index,
+                    }));
+        }
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "dedup", "--dry-run", "--wing", "project"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack Dedup", stdout.ToString());
+        Assert.Contains("Threshold semantics: similarity 0-1", stdout.ToString());
+        Assert.Contains("[DRY RUN]", stdout.ToString());
+    }
+
+    [TestMethod]
+    public async Task Migrate_DryRun_PrintsSummaryForSqlitePalace()
+    {
+        using var temp = new TemporaryDirectory();
+        var configDirectory = temp.GetPath("config");
+        var palacePath = temp.GetPath("palace");
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(Path.Combine(configDirectory, ConfigFileNames.ConfigJson), """
+            {
+              "vector_store_backend": "compatibility"
+            }
+            """);
+        await ChromaSqliteFixtureBuilder.CreateAsync(
+            palacePath,
+            [
+                new SqliteDrawerSeed(
+                    "drawer-1",
+                    "JWT authentication protects the backend API.",
+                    new Dictionary<string, object?>
+                    {
+                        ["wing"] = "project",
+                        ["room"] = "src",
+                        ["source_file"] = "/repo/src/auth.py",
+                        ["chunk_index"] = 0,
+                    }),
+            ]);
+
+        var app = new CliApp(configDirectory: configDirectory);
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await app.RunAsync(["--palace", palacePath, "migrate", "--dry-run"], stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr.ToString());
+        Assert.Contains("MemShack Migrate", stdout.ToString());
+        Assert.Contains("Extracted 1 drawers from SQLite", stdout.ToString());
+        Assert.Contains("DRY RUN", stdout.ToString());
     }
 
     [TestMethod]

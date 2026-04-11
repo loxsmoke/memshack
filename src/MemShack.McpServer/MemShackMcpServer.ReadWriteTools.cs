@@ -185,6 +185,8 @@ public sealed partial class MemShackMcpServer
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["is_duplicate"] = matches.Count > 0,
+            ["threshold"] = threshold,
+            ["threshold_kind"] = "similarity",
             ["matches"] = matches,
         };
     }

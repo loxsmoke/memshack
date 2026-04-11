@@ -36,26 +36,7 @@ if [ "$STOP_HOOK_ACTIVE" = "True" ] || [ "$STOP_HOOK_ACTIVE" = "true" ]; then
 fi
 
 if [ -f "$TRANSCRIPT_PATH" ]; then
-    EXCHANGE_COUNT="$("$PYTHON_BIN" - "$TRANSCRIPT_PATH" <<'PYEOF'
-import json
-import sys
-
-count = 0
-with open(sys.argv[1], encoding="utf-8") as handle:
-    for line in handle:
-        try:
-            entry = json.loads(line)
-        except Exception:
-            continue
-        message = entry.get("message", {})
-        if isinstance(message, dict) and message.get("role") == "user":
-            content = message.get("content", "")
-            if isinstance(content, str) and "<command-message>" in content:
-                continue
-            count += 1
-print(count)
-PYEOF
-)"
+    EXCHANGE_COUNT="$("$MEMSHACK_COMMAND" __count-human-messages "$TRANSCRIPT_PATH" 2>/dev/null || echo 0)"
 else
     EXCHANGE_COUNT=0
 fi

@@ -67,6 +67,9 @@ public sealed class ToolPackagingTests
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "plugins", "memshack", ".codex-plugin", "plugin.json")),
             "The repo-local MemShack plugin manifest should exist at plugins/memshack/.codex-plugin/plugin.json.");
         Assert.True(
+            File.Exists(Path.Combine(FixturePaths.RepoRootPath, "integrations", "openclaw", "SKILL.md")),
+            "The OpenClaw skill asset should exist at integrations/openclaw/SKILL.md.");
+        Assert.True(
             File.Exists(Path.Combine(FixturePaths.RepoRootPath, "docs", "tool-installation.md")),
             "The contributor packaging guide should exist at docs/tool-installation.md.");
         Assert.True(
@@ -106,6 +109,9 @@ public sealed class ToolPackagingTests
         Assert.Contains(
             contentItems,
             element => string.Equals((string?)element.Attribute("Include"), @"..\..\instructions\**\*", StringComparison.Ordinal));
+        Assert.Contains(
+            contentItems,
+            element => string.Equals((string?)element.Attribute("Include"), @"..\..\integrations\**\*", StringComparison.Ordinal));
     }
 
     private static string? GetProperty(XDocument document, string propertyName) =>

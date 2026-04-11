@@ -88,3 +88,14 @@ commit from upstream.
 - [x] 8.3 Review packaging/install docs after the Chroma auto-download direction.
 - [x] 8.4 Document intentional MemShack-only features, especially `shutdowndb`.
 - [x] 8.5 Review versioning/release metadata differences and decide which are product-significant versus upstream churn.
+
+## 9. Upstream Follow-Ups After 2026-04-10 Fetch
+
+- [x] 9.1 Add a `mems migrate` recovery path analogous to upstream `mempalace migrate`, focused on recovering palaces created with incompatible ChromaDB on-disk versions by reading `chroma.sqlite3` directly, rebuilding a fresh palace, backing up before swap, and supporting `--dry-run`.
+- [x] 9.2 Add an explicit `dedup` command rather than folding the flow into `repair`, and include the missing wing-scoped duplicate cleanup flow that upstream now exposes with `--wing`.
+- [x] 9.3 Review duplicate-threshold semantics and docs against the latest upstream guidance. MemShack now documents its explicit choice to keep similarity-threshold semantics for `dedup` and MCP `check_duplicate`, instead of mirroring upstream Chroma cosine-distance wording.
+- [x] 9.4 Add regression coverage for duplicate cleanup / repair behavior analogous to the newer upstream `repair.py` + `dedup.py` test expansion, including service and CLI coverage for `dedup` and `migrate`.
+- [x] 9.5 Port the Codex stop-hook message-counting fix into MemShack's Bash save hook so Codex `event_msg` / `user_message` transcripts trigger auto-save thresholds the same way upstream now does.
+- [x] 9.6 Add hook coverage for both Claude-style and Codex-style transcript counting so the Bash hook behavior is locked in by tests rather than only documented.
+- [x] 9.7 Add an OpenClaw / ClawHub skill analogous to upstream `integrations/openclaw/SKILL.md`, using the current C# MCP tool surface and setup commands instead of the Python package entrypoint.
+- [x] 9.8 Ship the OpenClaw skill asset plus MemShack-specific setup instructions for local Chroma, `mems mcp`, and the packaged .NET tool flow.

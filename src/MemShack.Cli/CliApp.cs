@@ -4,9 +4,12 @@ using System.Text;
 using System.Diagnostics;
 using MemShack.Application.Chunking;
 using MemShack.Application.Compression;
+using MemShack.Application.Deduplication;
 using MemShack.Application.Entities;
 using MemShack.Application.Extraction;
+using MemShack.Application.Hooks;
 using MemShack.Application.Layers;
+using MemShack.Application.Migration;
 using MemShack.Application.Mining;
 using MemShack.Application.Normalization;
 using MemShack.Application.Rooms;
@@ -83,8 +86,11 @@ public sealed class CliApp
             return command switch
             {
                 "__where-chroma" => await RunWhereChromaAsync(stdout),
+                "__count-human-messages" => await RunCountHumanMessagesAsync(commandArgs, stdout, stderr),
                 "init" => await RunInitAsync(commandArgs, stdin, stdout, stderr, cancellationToken),
                 "mine" => await RunMineAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
+                "migrate" => await RunMigrateAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
+                "dedup" => await RunDedupAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "split" => await RunSplitAsync(commandArgs, stdout, stderr, cancellationToken),
                 "search" => await RunSearchAsync(commandArgs, globalOptions, stdout, stderr, cancellationToken),
                 "hook" => await RunHookAsync(commandArgs, stdout, stderr, cancellationToken),
@@ -914,6 +920,254 @@ public sealed class CliApp
         return 0;
     }
 
+    private async Task<int> RunMigrateAsync(
+        IReadOnlyList<string> args,
+        GlobalOptions globalOptions,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        var parser = new ArgumentParser(args);
+        var dryRun = false;
+
+        while (parser.TryReadNext(out var token))
+        {
+            switch (token)
+            {
+                case "--dry-run":
+                    dryRun = true;
+                    break;
+                default:
+                    throw new CliUsageException($"Usage: {_commandName} migrate [--dry-run]");
+            }
+        }
+
+        var palacePath = ResolvePalacePath(globalOptions.PalacePath);
+        var config = LoadConfigSnapshotForPalace(palacePath);
+        var migrationService = new PalaceMigrationService(
+            targetPalacePath => CreateVectorStore(config with { PalacePath = targetPalacePath }, stderr),
+            async (targetPalacePath, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!string.IsNullOrWhiteSpace(config.ChromaUrl))
+                {
+                    return;
+                }
+
+                try
+                {
+                    new ChromaSidecarManager().Shutdown(config with { PalacePath = targetPalacePath });
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                await Task.CompletedTask;
+            });
+
+        PalaceMigrationResult result;
+        try
+        {
+            await stdout.WriteLineAsync($"\n{new string('=', 60)}");
+            await stdout.WriteLineAsync("  MemShack Migrate");
+            await stdout.WriteLineAsync(new string('=', 60));
+            result = await migrationService.MigrateAsync(
+                palacePath,
+                config.CollectionName,
+                dryRun,
+                progress: progress =>
+                {
+                    if (dryRun)
+                    {
+                        return;
+                    }
+
+                    if (progress.DrawersImported == progress.TotalDrawers ||
+                        progress.DrawersImported == 1 ||
+                        progress.DrawersImported % 500 == 0)
+                    {
+                        stdout.WriteLine($"  Imported {progress.DrawersImported}/{progress.TotalDrawers} drawers...");
+                    }
+                },
+                cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await stderr.WriteLineAsync(exception.Message);
+            return 1;
+        }
+
+        var dbSizeBytes = new FileInfo(result.DatabasePath).Length;
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync($"  Palace:    {result.PalacePath}");
+        await stdout.WriteLineAsync($"  Database:  {result.DatabasePath}");
+        await stdout.WriteLineAsync($"  DB size:   {FormatMegabytes(dbSizeBytes):F1} MB");
+        await stdout.WriteLineAsync($"  Source:    ChromaDB {result.SourceVersion}");
+        await stdout.WriteLineAsync($"  Target:    {DescribeVectorStore(CreateVectorStore(config, stderr))}");
+        await stdout.WriteLineAsync();
+        await stdout.WriteLineAsync($"  Extracted {result.DrawersExtracted} drawers from SQLite");
+
+        if (result.Wings.Count > 0)
+        {
+            await stdout.WriteLineAsync("\n  Summary:");
+            foreach (var wing in result.Wings)
+            {
+                await stdout.WriteLineAsync($"    WING: {wing.Wing} ({wing.DrawerCount} drawers)");
+                foreach (var room in wing.Rooms)
+                {
+                    await stdout.WriteLineAsync($"      ROOM: {room.Room,-30} {room.DrawerCount,5}");
+                }
+            }
+        }
+
+        if (result.DryRun)
+        {
+            await stdout.WriteLineAsync("\n  DRY RUN — no changes made.");
+            await stdout.WriteLineAsync($"  Would migrate {result.DrawersExtracted} drawers.");
+            await stdout.WriteLineAsync($"{new string('=', 60)}\n");
+            return 0;
+        }
+
+        await stdout.WriteLineAsync("\n  Migration complete.");
+        await stdout.WriteLineAsync($"  Drawers migrated: {result.DrawersImported}");
+        if (!string.IsNullOrWhiteSpace(result.BackupPath))
+        {
+            await stdout.WriteLineAsync($"  Backup at: {result.BackupPath}");
+        }
+
+        if (result.DrawersImported != result.DrawersExtracted)
+        {
+            await stdout.WriteLineAsync($"  WARNING: Expected {result.DrawersExtracted}, got {result.DrawersImported}");
+        }
+
+        await stdout.WriteLineAsync($"\n{new string('=', 60)}\n");
+        return 0;
+    }
+
+    private async Task<int> RunDedupAsync(
+        IReadOnlyList<string> args,
+        GlobalOptions globalOptions,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        var parser = new ArgumentParser(args);
+        var threshold = DuplicateCleanupService.DefaultSimilarityThreshold;
+        var dryRun = false;
+        var statsOnly = false;
+        string? wing = null;
+        string? sourcePattern = null;
+
+        while (parser.TryReadNext(out var token))
+        {
+            switch (token)
+            {
+                case "--threshold":
+                    threshold = double.Parse(parser.RequireValue(token), System.Globalization.CultureInfo.InvariantCulture);
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
+                case "--stats":
+                    statsOnly = true;
+                    break;
+                case "--wing":
+                    wing = parser.RequireValue(token);
+                    break;
+                case "--source":
+                    sourcePattern = parser.RequireValue(token);
+                    break;
+                default:
+                    throw new CliUsageException($"Usage: {_commandName} dedup [--dry-run] [--threshold <0-1>] [--stats] [--wing <name>] [--source <pattern>]");
+            }
+        }
+
+        threshold = Math.Clamp(threshold, 0d, 1d);
+
+        var palacePath = ResolvePalacePath(globalOptions.PalacePath);
+        var store = CreateVectorStore(palacePath, stderr);
+        var collections = await store.ListCollectionsAsync(cancellationToken);
+        if (!collections.Contains(CollectionNames.Drawers, StringComparer.Ordinal))
+        {
+            await stderr.WriteLineAsync($"\n  No palace found at {palacePath}");
+            await stderr.WriteLineAsync($"  Run: {_commandName} init <dir> then {_commandName} mine <dir>");
+            return 1;
+        }
+
+        var service = new DuplicateCleanupService(store);
+
+        await stdout.WriteLineAsync($"\n{new string('=', 55)}");
+        await stdout.WriteLineAsync("  MemShack Dedup");
+        await stdout.WriteLineAsync(new string('=', 55));
+        await stdout.WriteLineAsync($"  Palace: {palacePath}");
+        await stdout.WriteLineAsync($"  Store: {DescribeVectorStore(store)}");
+
+        if (wing is not null)
+        {
+            await stdout.WriteLineAsync($"  Wing: {wing}");
+        }
+
+        if (sourcePattern is not null)
+        {
+            await stdout.WriteLineAsync($"  Source filter: {sourcePattern}");
+        }
+
+        if (statsOnly)
+        {
+            var stats = await service.GetStatsAsync(CollectionNames.Drawers, wing, sourcePattern, cancellationToken: cancellationToken);
+            await stdout.WriteLineAsync($"  Sources with {DuplicateCleanupService.DefaultMinimumGroupSize}+ drawers: {stats.SourceGroupCount}");
+            await stdout.WriteLineAsync($"  Total drawers in those sources: {stats.DrawersInCandidateGroups:N0}");
+            await stdout.WriteLineAsync("\n  Top 15 by drawer count:");
+            foreach (var group in stats.LargestGroups)
+            {
+                await stdout.WriteLineAsync($"    {group.DrawerCount,4}  {group.SourceFile}");
+            }
+
+            await stdout.WriteLineAsync($"\n  Estimated duplicates (groups > 20): ~{stats.EstimatedDuplicates:N0}");
+            await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+            return 0;
+        }
+
+        await stdout.WriteLineAsync($"  Threshold: {threshold:F2} similarity");
+        await stdout.WriteLineAsync($"  Mode: {(dryRun ? "DRY RUN" : "LIVE")}");
+        await stdout.WriteLineAsync(new string('\u2500', 55));
+
+        var result = await service.DeduplicateAsync(
+            CollectionNames.Drawers,
+            threshold,
+            dryRun,
+            wing,
+            sourcePattern,
+            cancellationToken: cancellationToken);
+
+        await stdout.WriteLineAsync($"\n  Sources to check: {result.SourceGroupCount}");
+        foreach (var group in result.GroupResults.Where(group => group.DeletedCount > 0))
+        {
+            await stdout.WriteLineAsync(
+                $"  {group.SourceFile,-50} {group.OriginalCount,4} \u2192 {group.KeptCount,4}  (-{group.DeletedCount})");
+        }
+
+        if (result.GroupResults.All(group => group.DeletedCount == 0))
+        {
+            await stdout.WriteLineAsync("  No near-duplicate drawers met the current threshold.");
+        }
+
+        await stdout.WriteLineAsync($"\n{new string('\u2500', 55)}");
+        await stdout.WriteLineAsync(
+            $"  Drawers: {result.TotalFilteredDrawers:N0} \u2192 {result.TotalFilteredDrawers - result.DeletedCount:N0}  (-{result.DeletedCount:N0} removed)");
+        await stdout.WriteLineAsync($"  Palace after: {result.TotalDrawersAfter:N0} drawers");
+        await stdout.WriteLineAsync("  Threshold semantics: similarity 0-1 (higher = stricter).");
+        await stdout.WriteLineAsync("  This differs from upstream Python dedup, which documents Chroma cosine distance.");
+
+        if (dryRun)
+        {
+            await stdout.WriteLineAsync("\n  [DRY RUN] No changes written. Re-run without --dry-run to apply.");
+        }
+
+        await stdout.WriteLineAsync($"{new string('=', 55)}\n");
+        return 0;
+    }
+
     private async Task<int> RunHookAsync(
         IReadOnlyList<string> args,
         TextWriter stdout,
@@ -1081,6 +1335,13 @@ public sealed class CliApp
         await stdout.WriteLineAsync();
         await stdout.WriteLineAsync("Run the server directly:");
         await stdout.WriteLineAsync($"  {fullCommand}");
+
+        var openClawAssetDirectory = ResolveAssetDirectory(Path.Combine("integrations", "openclaw"));
+        if (openClawAssetDirectory is not null)
+        {
+            await stdout.WriteLineAsync();
+            await stdout.WriteLineAsync($"OpenClaw / ClawHub skill asset: {Path.Combine(openClawAssetDirectory, "SKILL.md")}");
+        }
 
         if (projectPath is null)
         {
@@ -1421,6 +1682,21 @@ public sealed class CliApp
         return 1;
     }
 
+    private static async Task<int> RunCountHumanMessagesAsync(
+        IReadOnlyList<string> args,
+        TextWriter stdout,
+        TextWriter stderr)
+    {
+        if (args.Count != 1)
+        {
+            await stderr.WriteLineAsync("Usage: mems __count-human-messages <transcript-path>");
+            return 1;
+        }
+
+        await stdout.WriteLineAsync(HookTranscriptCounter.CountHumanMessages(args[0]).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
+
     private static async Task<int> RunWhereChromaAsync(TextWriter stdout)
     {
         var candidate = ChromaSidecarManager.GetBundledBinaryCandidatePath(AppContext.BaseDirectory);
@@ -1508,9 +1784,14 @@ public sealed class CliApp
         return null;
     }
 
-    private IVectorStore CreateVectorStore(string palacePath, TextWriter? progressWriter = null)
+    private MempalaceConfigSnapshot LoadConfigSnapshotForPalace(string palacePath) =>
+        _configStore.Load(_configDirectory) with { PalacePath = palacePath };
+
+    private IVectorStore CreateVectorStore(string palacePath, TextWriter? progressWriter = null) =>
+        CreateVectorStore(LoadConfigSnapshotForPalace(palacePath), progressWriter);
+
+    private IVectorStore CreateVectorStore(MempalaceConfigSnapshot config, TextWriter? progressWriter = null)
     {
-        var config = _configStore.Load(_configDirectory) with { PalacePath = palacePath };
         try
         {
             var progress = progressWriter is null ? null : CreateChromaDownloadProgressReporter(progressWriter);
@@ -1681,6 +1962,8 @@ public sealed class CliApp
         (string.Equals(args[0], "--help", StringComparison.Ordinal) ||
          string.Equals(args[0], "-h", StringComparison.Ordinal) ||
          string.Equals(args[0], "help", StringComparison.Ordinal));
+
+    private static double FormatMegabytes(long bytes) => bytes / 1024d / 1024d;
 
     private sealed class MiningProgressReporter
     {
@@ -1940,6 +2223,9 @@ Commands:
   {{_commandName}} mine <dir> [--mode projects|convos] [--wing <name>] [--no-gitignore]
                    [--include-ignored <path>] [--agent <name>] [--limit <n>]
                    [--dry-run] [--extract exchange|general]
+  {{_commandName}} migrate [--dry-run]
+  {{_commandName}} dedup [--dry-run] [--threshold <0-1>] [--stats] [--wing <name>]
+                    [--source <pattern>]
   {{_commandName}} search <query> [--wing <name>] [--room <name>] [--results <n>]
   {{_commandName}} hook
   {{_commandName}} instructions

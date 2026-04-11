@@ -74,9 +74,12 @@ For `--tool-path` installs, the generated command is still `mems`, but you eithe
 mems init <dir> [--yes]
 mems mine <dir>
 mems search <query>
+mems dedup --dry-run
+mems migrate --dry-run
 mems status
 mems wake-up
 mems compress
+mems repair
 mems split <dir>
 mems mcp
 mems shutdowndb

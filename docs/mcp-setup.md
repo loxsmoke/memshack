@@ -56,6 +56,13 @@ See:
 - [../hooks/README.md](../hooks/README.md)
 - [../instructions/README.md](../instructions/README.md)
 - [../plugins/memshack/README.md](../plugins/memshack/README.md)
+- [../integrations/openclaw/SKILL.md](../integrations/openclaw/SKILL.md)
+
+## OpenClaw / ClawHub
+
+MemShack now ships a repo-local OpenClaw skill asset. Start with `mems mcp`,
+then adapt the printed `dotnet run --project ...` command into your OpenClaw or
+ClawHub MCP configuration.
 
 ## Notes
 

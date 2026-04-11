@@ -128,6 +128,8 @@ Related setup helpers:
   Prints or exports Bash hook assets for Claude Code and Codex.
 - `mems instructions`
   Prints or exports repo-local instruction assets.
+- `integrations/openclaw/SKILL.md`
+  Repo-local OpenClaw / ClawHub skill metadata and setup notes for the current .NET + MCP flow.
 
 More setup docs:
 
@@ -135,6 +137,7 @@ More setup docs:
 - [Hooks](hooks/README.md)
 - [Instructions](instructions/README.md)
 - [Plugin Metadata](plugins/memshack/README.md)
+- [OpenClaw Skill](integrations/openclaw/SKILL.md)
 
 ## Common Commands
 
@@ -142,9 +145,12 @@ More setup docs:
 mems init <dir> [--yes]
 mems mine <dir>
 mems search <query>
+mems dedup [--dry-run]
+mems migrate [--dry-run]
 mems status
 mems wake-up
 mems compress
+mems repair
 mems split <dir>
 mems mcp
 mems hook
@@ -153,6 +159,8 @@ mems shutdowndb
 ```
 
 Use `--palace <path>` when you want to point the CLI at a different palace directory.
+
+`mems dedup` uses a similarity threshold from `0` to `1`, where higher is stricter. This is intentionally different from the latest upstream Python `dedup`, which documents Chroma cosine distance.
 
 ## Versioning And Releases
 
